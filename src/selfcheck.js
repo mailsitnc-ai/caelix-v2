@@ -140,7 +140,7 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     // ---------- Keys, MCP, Hooks, models ----------
     await click('#btn-keys'); await until(`document.querySelectorAll('.prow').length>=10`, 8000, 'keys screen'); await shot('14-keys-screen');
     const rows = await ev(`Array.from(document.querySelectorAll('.prow .pt')).map(e=>e.innerText.trim())`);
-    const wantP = ['Google Gemini', 'OpenRouter', 'NVIDIA NIM', 'Groq', 'Z.ai GLM', 'CoArena', 'Kilo Gateway', 'OpenCode Zen', 'Numes', 'Abliteration AI', 'OmniRoute'];
+    const wantP = ['Google Gemini', 'OpenRouter', 'NVIDIA NIM', 'Groq', 'CoArena', 'Kilo Gateway', 'OpenCode Zen', 'Numes', 'Abliteration AI', 'OmniRoute'];
     pass('Keys screen lists all ten providers', wantP.every((p) => rows.some((r) => r.startsWith(p))), rows.join(' | '));
     const fake = 'gsk_selfcheck_1234'; await ev(`(function(){const r=Array.from(document.querySelectorAll('.prow')).find(x=>x.innerText.trim().startsWith('Groq')); const i=r.querySelector('input[type=password]'); i.value=${JSON.stringify(fake)}; r.querySelector('.btn.pri').click(); return 1})()`);
     await until(`document.body.innerText.includes('••••1234')`, 10000, 'masked key'); await sleep(300);

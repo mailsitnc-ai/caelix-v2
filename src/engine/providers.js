@@ -11,7 +11,6 @@ const PROVIDERS = [
   { id: 'kilo', name: 'Kilo Gateway', base: 'https://ai-gateway.kilo.ai/api/v1', keyOptional: true, anonymous: true, keyHint: 'optional', docs: 'https://kilo.ai', note: 'Built in: free models work with no key.' },
   { id: 'zen', name: 'OpenCode Zen', base: 'https://opencode.ai/zen/v1', keyOptional: true, anonymous: true, keyHint: 'optional', docs: 'https://opencode.ai/zen', note: 'Built in: free models work with no key.' },
   { id: 'numes', name: 'Numes', base: 'https://api.numes.ai/api/v1', keyHint: 'key', docs: 'https://numes.ai/dashboard/keys' },
-  { id: 'zai', name: 'Z.ai GLM', base: 'https://api.z.ai/api/paas/v4', keyHint: 'key', docs: 'https://z.ai/manage-apikey/apikey-list', note: 'Free models: glm-4.7-flash and glm-4.6v-flash (vision). Needs a free Z.ai account key.' },
   { id: 'abliteration', name: 'Abliteration AI', base: 'https://api.abliteration.ai/v1', keyHint: 'key', docs: 'https://abliteration.ai' },
   { id: 'omniroute', name: 'OmniRoute', virtual: true, base: '', editableBase: true, keyOptional: true,
     note: 'Routes across your connected providers. Optionally set the base URL of a self-hosted OmniRoute server.' },
@@ -62,7 +61,7 @@ async function listModels(providerId, key, overrides, { force } = {}) {
     models = (j.data || j.models || []).map((m) => ({
       id: m.id, name: m.name || m.id, provider: p.id, desc: (m.description || '').slice(0, 120),
       ctx: m.context_length || m.context_window,
-      free: m.pricing ? (Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0) : (/:free$/.test(m.id) || (p.id === 'zai' && /^glm-[\d.]+v?-flash$/i.test(m.id))),
+      free: m.pricing ? (Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0) : (/:free$/.test(m.id)),
     }));
   }
   if (p.id === 'nvidia') models = models.filter((m) => !RE.nochat.test(m.id)); // NIM lists embedding / safety / vision-only functions that cannot chat
