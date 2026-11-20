@@ -127,6 +127,7 @@ function registerIpc() {
   handle('keys:remove', (id) => { keys.remove(id); return providerState(); });
   handle('keys:base', (id, url) => { const pv = readProv(); pv.bases = pv.bases || {}; if (url) pv.bases[id] = url.trim(); else delete pv.bases[id]; writeProv(pv); return providerState(); });
   handle('models:list', async (pid, force) => { const { providers } = E(); return providers.listModels(pid, keys.get(pid), readProv().bases, { force }); });
+  handle('models:probe', async (pid) => { const { providers } = E(); providers.setHealthFile(path.join(userDir(), 'model-health.json')); return providers.probeModels(pid, keys.get(pid), readProv().bases, { onProgress: (d, n) => win && win.webContents.send('probe:progress', { pid, d, n }) }); });
   handle('last:set', (patch) => { const pv = readProv(); pv.last = { ...(pv.last || {}), ...patch }; writeProv(pv); return true; });
 
   handle('session:new', ({ cwd, provider, model, mode, kind }) => {
@@ -303,6 +304,12 @@ app.whenReady().then(() => {
   keys = createKeyStore(userDir(), safeStorage); store = createSessionStore(userDir());
   app.setAboutPanelOptions({ applicationName: 'CAELIX', applicationVersion: '2.0.0', copyright: 'CAELIX', iconPath: ICON });
   if (process.platform === 'darwin' && app.dock) { try { app.dock.setIcon(nativeImage.createFromPath(ICON)); } catch (_) {} }
+  const pi = process.argv.indexOf('--probe');
+  if (pi > 0) { // headless: caelix --probe <provider>  -> writes checks/probe-<provider>.json and quits
+    const pid = process.argv[pi + 1]; const { providers } = E(); providers.setHealthFile(path.join(userDir(), 'model-health.json'));
+    providers.probeModels(pid, keys.get(pid), readProv().bases, {}).then((r) => { fs.writeFileSync(path.join(userDir(), 'probe-' + pid + '.json'), JSON.stringify(r, null, 1)); app.quit(); }).catch((e) => { fs.writeFileSync(path.join(userDir(), 'probe-' + pid + '.json'), JSON.stringify({ error: String(e.message) })); app.quit(); });
+    return;
+  }
   buildMenu(); registerIpc(); createWindow();
   if (SELF) require('./src/selfcheck').run({ app, getWin: () => win, timing, ROOT, userDir, keys, live });
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

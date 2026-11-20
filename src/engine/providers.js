@@ -142,6 +142,26 @@ function markFailed(p, m, err) {
 function markOk(p, m) { if (health.delete(hkey(p, m))) saveHealth(); }
 const sticky = new Map(); // objective -> {provider, model}
 
+// ---- probe: send a 5-token request to each model to find which ones this key can really use ----
+async function probeModels(providerId, key, overrides, { onProgress, concurrency = 8 } = {}) {
+  const p = byId(providerId); const models = await listModels(providerId, key, overrides, { force: true });
+  const base = baseOf(p, overrides); const out = []; let i = 0, done = 0;
+  async function one(m) {
+    const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 45000); let status = 0, text = '';
+    try {
+      const r = await fetch(base + '/chat/completions', { method: 'POST', headers: headers(p, key), body: JSON.stringify({ model: m.id, messages: [{ role: 'user', content: 'Say ok' }], max_tokens: 8, stream: false }), signal: ctl.signal });
+      status = r.status; text = (await r.text()).slice(0, 300);
+    } catch (e) { text = e.name === 'AbortError' ? 'timed out after 45 s' : String(e.message); }
+    clearTimeout(to);
+    const verdict = status === 200 ? 'ok' : status === 404 ? 'not available on this account' : status === 401 || status === 403 ? 'no access (key or terms)' : status === 402 ? 'needs credits' : status === 429 ? 'rate limited (inconclusive)' : status === 400 || status === 422 ? 'not a chat model / rejected request' : status ? 'error ' + status : 'no answer';
+    const row = { id: m.id, status, verdict, detail: status === 200 ? '' : text.replace(/\s+/g, ' ').slice(0, 160) };
+    if (status === 200) markOk(providerId, m.id); else if ([400, 401, 402, 403, 404, 422].includes(status)) markFailed(providerId, m.id, { status, message: text });
+    out.push(row); done++; onProgress && onProgress(done, models.length);
+  }
+  await Promise.all(Array.from({ length: concurrency }, async () => { while (i < models.length) await one(models[i++]); }));
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
 // ---- OmniRoute: pick ordered candidates by objective across connected providers ----
 const RE = {
   coding: /coder|code|qwen3?-?.*(480|235|32)|deepseek|gpt-oss|kimi|glm|minimax|gemini.*pro|devstral|codestral/i,
@@ -175,4 +195,4 @@ function routeCandidates(objective, byProvider) {
   return list.sort((a, b) => b.s - a.s);
 }
 
-module.exports = { setHealthFile, isBenched, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };
+module.exports = { probeModels, setHealthFile, isBenched, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };
