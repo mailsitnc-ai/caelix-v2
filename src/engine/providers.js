@@ -46,6 +46,7 @@ async function listModels(providerId, key, overrides, { force } = {}) {
   if (c && !force && Date.now() - c.at < 10 * 60 * 1000) return c.models;
   const base = baseOf(p, overrides);
   if (!base) throw new Error(p.name + ' needs a base URL (Keys screen).');
+  if (p.id === 'gemini' && !key) throw new Error('Add your Gemini key on the Keys screen to load its models.');
   let models;
   if (p.id === 'gemini' && key) {
     const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=' + encodeURIComponent(key));

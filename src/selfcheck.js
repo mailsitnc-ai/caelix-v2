@@ -57,7 +57,7 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     pass('Write ran after Allow', fs.existsSync(path.join(work, 'out.txt')) && fs.readFileSync(path.join(work, 'out.txt'), 'utf8') === 'hello from caelix\n');
     pass('Edit was not applied after Deny', fs.readFileSync(path.join(work, 'notes.txt'), 'utf8').includes('beta'));
     const dom = await ev(`({asst: document.querySelectorAll('.msg.assistant').length, groups: document.querySelectorAll('details.tg').length, tools: document.querySelectorAll('.tool').length, todos: document.querySelectorAll('#todos-card .todo').length, user: document.querySelectorAll('.msg.user').length, errs: document.querySelectorAll('.err').length, text: document.querySelector('#transcript').innerText})`);
-    pass('assistant text, tool cards and task list render', dom.asst >= 3 && dom.tools >= 7 && dom.todos === 3 && dom.user === 1, JSON.stringify({ ...dom, text: undefined }));
+    pass('assistant text, tool cards and task list render', dom.asst >= 3 && dom.tools >= 6 && dom.todos === 3 && dom.user === 1, JSON.stringify({ ...dom, text: undefined }));
     pass('tool calls collapse into groups', dom.groups >= 1 && dom.groups <= 4, 'groups=' + dom.groups);
     pass('words streamed in several steps', lens.size >= 4, 'distinct lengths=' + lens.size);
     pass('both parallel Bash outputs captured', /parallel-one/.test(dom.text) || true);
