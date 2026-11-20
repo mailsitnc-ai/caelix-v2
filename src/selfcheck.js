@@ -22,7 +22,7 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
   win.webContents.on('did-fail-load', (_e, c, d) => errors.push('did-fail-load: ' + c + ' ' + d));
   const ev = (js) => win.webContents.executeJavaScript(js, true);
   const until = async (js, ms = 20000, label = js) => { const t = Date.now(); while (Date.now() - t < ms) { try { const v = await ev(js); if (v) return v; } catch (_) {} await sleep(80); } throw new Error('timeout waiting for: ' + label.slice(0, 140)); };
-  const shot = async (name) => { try { const img = await win.webContents.capturePage(); fs.writeFileSync(path.join(out, name + '.png'), img.toPNG()); } catch (e) { errors.push('screenshot ' + name + ': ' + e.message); } };
+  const shot = async (name) => { for (let k = 0; k < 3; k++) { try { const img = await win.webContents.capturePage(); fs.writeFileSync(path.join(out, name + '.png'), img.toPNG()); return; } catch (e) { if (k === 2) errors.push('screenshot ' + name + ': ' + e.message); else await sleep(500); } } };
   const click = (sel) => ev(`(function(){const e=document.querySelector(${JSON.stringify(sel)}); if(!e) return false; e.click(); return true;})()`);
   const closeModals = () => ev(`document.querySelector('#modal-host').innerHTML=''; document.querySelectorAll('.mpicker').forEach(n=>n.remove()); 1`);
   const waitIdle = (txt, ms = 20000) => until(`!window.S.busy && ${txt ? `document.querySelector('#transcript').innerText.includes(${JSON.stringify(txt)})` : 'true'}`, ms, 'turn idle ' + (txt || ''));
