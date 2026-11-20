@@ -129,9 +129,9 @@ const RE = {
 function score(obj, m) {
   if (RE.bad.test(m.id)) return -1;
   let s = 1;
-  if (obj === 'coding' && RE.coding.test(m.id)) s += 5;
+  if (obj === 'coding' && RE.coding.test(m.id)) s += 5 + (/coder|codestral|devstral/i.test(m.id) ? 2 : 0);
   if (obj === 'fast' && RE.fast.test(m.id)) s += 5;
-  if (obj === 'smart' && RE.smart.test(m.id)) s += 5;
+  if (obj === 'smart' && RE.smart.test(m.id)) s += 5 + (/(pro|opus|gpt-5|o3|405b|ultra)/i.test(m.id) ? 2 : 0);
   if (obj === 'cheap') s += (m.free ? 6 : 0) + (RE.fast.test(m.id) ? 2 : 0);
   if (obj === 'auto') s += (RE.smart.test(m.id) ? 2 : 0) + (RE.fast.test(m.id) ? 1 : 0);
   if (obj === 'fast' && m.provider === 'groq') s += 3;

@@ -102,6 +102,7 @@
     g.sum.innerHTML = (running ? '<span class="run"></span> ' : '') + esc(running ? (last.name + ' ' + (last.summary || '').slice(0, 60)) : parts.join(', '));
   }
   function addTool(t) {
+    if (t.name === 'TodoWrite') return null;
     if (!S.tg) { const d = el('details', 'tg'); if (S.view === 'verbose') d.open = true; const sum = el('summary'); const body = el('div', 'tg-body'); d.append(sum, body); $('#transcript').appendChild(d); S.tg = { d, sum, body, items: [] }; moveWorkingLast(); }
     const card = el('div', 'tool'); const inputHtml = toolInput(t);
     card.innerHTML = `<div class="tool-h"><b>${esc(t.name)}</b><span class="sum">${esc((t.summary || '').slice(0, 160))}</span><span class="ms"></span></div>${inputHtml}`;
@@ -159,7 +160,7 @@
       case 'text': if (!S.curText) startAssistant(); S.curBuf += e.delta; S.curText.innerHTML = md.render(S.curBuf); stick(); break;
       case 'text_end': S.items.push({ type: 'assistant', text: S.curBuf }); S.curText = null; break;
       case 'thinking': { let t = $('.thinking:last-child'); if (!t || !t.classList.contains('thinking-only')) { t = el('div', 'thinking thinking-only'); $('#transcript').appendChild(t); } t.textContent += e.delta; break; }
-      case 'tool_start': { const rec = addTool(e); S.tg.d._g = S.tg; S.items.push({ type: 'tool', ...e }); stick(); break; }
+      case 'tool_start': { const rec = addTool(e); if (S.tg) S.tg.d._g = S.tg; S.items.push({ type: 'tool', ...e }); stick(); break; }
       case 'tool_result': { const g = S.tg && S.tg.map && S.tg.map[e.id] ? S.tg : findGroup(e.id); finishTool(e.id, e, g); const it = S.items.find((x) => x.type === 'tool' && x.id === e.id); if (it) Object.assign(it, { output: e.output, error: e.error }); stick(); break; }
       case 'todos': S.todos = e.todos; renderTodos(); stick(); break;
       case 'error': addNotice('err', e.message); stick(); break;

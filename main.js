@@ -9,7 +9,7 @@ app.setName('CAELIX');
 const ROOT = __dirname;
 const SELF = process.argv.includes('--self-check');
 const ICON = path.join(ROOT, 'assets', 'icons', 'icon.png');
-if (SELF) app.setPath('userData', path.join(ROOT, 'checks', '_selfcheck-userdata'));
+if (SELF) app.setPath('userData', path.join(require('os').tmpdir(), 'caelix-selfcheck-userdata'));
 if (SELF) { try { fs.rmSync(app.getPath('userData'), { recursive: true, force: true }); } catch (_) {} }
 
 let win = null; const timing = { boot: BOOT };

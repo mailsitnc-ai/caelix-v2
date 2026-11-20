@@ -47,7 +47,7 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     // answer permission pop-ups: allow the Write, deny the Edit
     let perms = 0; const seen = new Set(); const lens = new Set(); const t1 = Date.now();
     while (Date.now() - t1 < 30000) {
-      const st = await ev(`({busy: window.S.busy, allow: !!document.querySelector('#perm-allow'), len: (document.querySelector('.msg.assistant:last-of-type')||{textContent:''}).textContent.length, txt: (document.querySelector('.modal.perm')||{textContent:''}).textContent})`);
+      const st = await ev(`({busy: window.S.busy, allow: !!document.querySelector('#perm-allow'), len: (Array.from(document.querySelectorAll('.msg.assistant')).pop()||{textContent:''}).textContent.length, txt: (document.querySelector('.modal.perm')||{textContent:''}).textContent})`);
       lens.add(st.len);
       if (st.allow) { perms++; await shot('02-permission-popup-' + perms); if (/Edit/.test(st.txt) && !/Write/.test(st.txt)) await click('#perm-deny'); else await click('#perm-allow'); await sleep(200); }
       if (!st.busy && t1 + 800 < Date.now() && perms >= 2) break; await sleep(60);
@@ -112,7 +112,7 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     await click('#chip-model'); await until(`document.querySelectorAll('.mpicker .mi').length>=5`, 8000, 'model picker'); await sleep(300); await shot('10-model-picker');
     const og = await ev(`(function(){const g=document.querySelector('.mpicker .mg'); const items=[]; let n=g.nextSibling; while(n&&!n.classList.contains('mg')){ if(n.classList.contains('mi')) items.push(n.querySelector('.mn').textContent); n=n.nextSibling;} return {h:g.textContent, items}})()`);
     pass('model picker shows OMNIROUTE (5) with auto, coding, fast, cheap, smart', /OMNIROUTE \(5\)/.test(og.h) && ['auto', 'auto/coding', 'auto/fast', 'auto/cheap', 'auto/smart'].every((m) => og.items.includes(m)), og.h + ' ' + og.items.join(','));
-    await ev(`document.querySelectorAll('.mpicker .mi')[2].click()`); await sleep(200);
+    await ev(`document.querySelectorAll('.mpicker .mi')[1].click()`); await sleep(200);
     pass('choosing a model updates the composer', (await ev(`document.querySelector('#model-name').textContent`)) === 'auto/coding');
     await ev(`window.S.cur && window.S.cur.provider`);
     await ev(`window.caelix.removeKey('groq')`);
