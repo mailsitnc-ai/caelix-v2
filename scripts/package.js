@@ -30,7 +30,14 @@ const appDir = path.join(res, 'app'); fs.mkdirSync(path.join(appDir, 'assets', '
 for (const f of ['main.js', 'preload.js']) fs.copyFileSync(path.join(ROOT, f), path.join(appDir, f));
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')); delete pkg.devDependencies; delete pkg.scripts; fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify(pkg, null, 2));
 for (const d of ['src', 'renderer', 'bin']) run('cp', ['-R', path.join(ROOT, d), path.join(appDir, d)]);
-for (const f of ['icon.png', 'icon-128.png', 'icon-512.png', 'icon.icns']) fs.copyFileSync(path.join(ROOT, 'assets', 'icons', f), path.join(appDir, 'assets', 'icons', f));
+for (const f of fs.readdirSync(path.join(ROOT, 'assets', 'icons'))) { const sp = path.join(ROOT, 'assets', 'icons', f); if (fs.statSync(sp).isFile()) fs.copyFileSync(sp, path.join(appDir, 'assets', 'icons', f)); }
+// fail the build if the interface references a file that is not in the bundle
+for (const page of ['renderer/index.html']) {
+  const html = fs.readFileSync(path.join(appDir, page), 'utf8'); const missing = [];
+  for (const m of html.matchAll(/(?:src|href)="([^"#?]+)"/g)) { if (/^(https?:|data:)/.test(m[1])) continue; if (!fs.existsSync(path.resolve(path.dirname(path.join(appDir, page)), m[1]))) missing.push(m[1]); }
+  for (const m of fs.readFileSync(path.join(appDir, 'renderer', 'modals.js'), 'utf8').matchAll(/src="(\.\.\/[^"]+)"/g)) if (!fs.existsSync(path.resolve(appDir, 'renderer', m[1]))) missing.push(m[1]);
+  if (missing.length) { console.error('Missing files referenced by ' + page + ': ' + missing.join(', ')); process.exit(1); }
+}
 // renderer references ../assets/icons/icon-128.png: same relative layout inside the app folder.
 
 run('codesign', ['--force', '--deep', '--sign', '-', APP]);

@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, 'assets/source/caelix-icon-blue-original.webp')  # v2 redesign logo (blue); previous orange logo kept in assets/source
+SRC = os.path.join(ROOT, 'assets/source/caelix-icon-blue-hq.webp')  # v2 redesign logo, high-quality version (earlier logos kept in assets/source)
 OUT = os.path.join(ROOT, 'assets/icons')
 os.makedirs(OUT, exist_ok=True)
 
@@ -15,7 +15,7 @@ im = Image.open(SRC).convert('RGB')
 a = np.asarray(im).astype(int)
 H, W, _ = a.shape
 # Artwork geometry (measured from the source image): a squircle, exponent ~3.9.
-BX0, BY0, BX1, BY1, N = 80.0, 82.0, 783.0, 785.0, 4.2
+BX0, BY0, BX1, BY1, N = 259.0, 106.0, 941.0, 789.0, 3.8
 side = int(round(max(BX1 - BX0, BY1 - BY0)))
 cxm, cym = (BX0 + BX1) / 2, (BY0 + BY1) / 2
 left, top = int(round(cxm - side / 2)), int(round(cym - side / 2))

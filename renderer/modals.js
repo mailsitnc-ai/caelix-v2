@@ -6,7 +6,7 @@
   // v1-style dialog: logo, title, subtitle, close button
   function dialog(title, sub, bodyNode, footerNodes, opts) {
     opts = opts || {}; const sc = el('div', 'scrim'); const m = el('div', 'modal' + (opts.cls ? ' ' + opts.cls : '')); if (opts.width) m.style.width = opts.width;
-    const h = el('div', 'mhead'); h.innerHTML = `<img src="../assets/icons/icon-128.png" width="62" height="62" alt=""><div><h2>${esc(title)}</h2>${sub ? `<p>${sub}</p>` : ''}</div>`; const x = el('button', 'mx', '✕'); x.onclick = close; h.appendChild(x);
+    const h = el('div', 'mhead'); h.innerHTML = `<img src="../assets/icons/icon-256.png" width="62" height="62" alt=""><div><h2>${esc(title)}</h2>${sub ? `<p>${sub}</p>` : ''}</div>`; const x = el('button', 'mx', '✕'); x.onclick = close; h.appendChild(x);
     const mb = el('div', 'mb'); mb.appendChild(bodyNode); m.append(h, mb);
     if (footerNodes && footerNodes.length) { const f = el('footer'); footerNodes.forEach((n) => f.appendChild(n)); m.appendChild(f); }
     sc.appendChild(m); sc.onmousedown = (e) => { if (e.target === sc && !opts.sticky) close(); }; host().appendChild(sc);

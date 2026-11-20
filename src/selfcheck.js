@@ -36,6 +36,8 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     await sleep(300); const tm = await ev('window.caelix.timing()');
     pass('window shown in under 2 seconds', (tm.windowShown || 99999) < 2000, `windowShown=${tm.windowShown}ms uiReady=${tm.uiReady}ms`);
     pass('title is CAELIX', win.getTitle().includes('CAELIX'), win.getTitle());
+    const imgs = await ev(`Array.from(document.images).map(i => ({src: i.getAttribute('src'), ok: i.complete && i.naturalWidth > 0, w: i.naturalWidth}))`);
+    pass('every logo image in the window loads', imgs.length >= 2 && imgs.every((i) => i.ok && i.w >= 128), JSON.stringify(imgs));
 
     // ---------- Chat mode: no folder, no file tools ----------
     pass('starts in Chat with no folder needed', await ev(`window.S.kind==='chat' && document.querySelector('#seg-chat').classList.contains('on') && document.querySelector('#chip-folder-top').hidden && !document.querySelector('#input').disabled`));
