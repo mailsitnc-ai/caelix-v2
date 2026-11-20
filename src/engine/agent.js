@@ -5,7 +5,7 @@ const path = require('path');
 const providers = require('./providers');
 const { streamPretend } = require('./pretend');
 const { IMPL, DEFS, READ_ONLY, toolDefs } = require('./tools');
-const { decide, summarize, ruleFor } = require('./permissions');
+const { decide, summarize, ruleFor, SAFE_BASH } = require('./permissions');
 const config = require('./config');
 
 const estTokens = (msgs) => Math.ceil(JSON.stringify(msgs).length / 4);
@@ -114,7 +114,8 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
       results.set(p.c.id, out);
       if (depth === 0) env.emit({ type: 'tool_result', id: p.c.id, name: p.c.name, output: out.length > 4000 ? out.slice(0, 4000) + '\n…' : out, error: isErr, ms: Date.now() - t0 });
     };
-    const ro = plan.filter((p) => p.err || READ_ONLY.has(p.c.name) || p.c.name === 'Agent' || (rt.mcp && rt.mcp.route[p.c.name] && false));
+    const indep = (p) => p.err || READ_ONLY.has(p.c.name) || p.c.name === 'Agent' || (p.c.name === 'Bash' && p.input && (p.input.run_in_background || SAFE_BASH.test(p.input.command || '')));
+    const ro = plan.filter(indep);
     const mu = plan.filter((p) => !ro.includes(p));
     await Promise.all(ro.map(run));
     for (const p of mu) { if (env.signal.aborted) break; await run(p); }

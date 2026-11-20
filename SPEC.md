@@ -129,3 +129,10 @@ Model adapters normalise every provider to: `text_delta`, `tool_call{id,name,inp
 - Finish the REA run on `app.asar` and add findings (window sizes, CSS tokens, IPC channel names, how it spawns the engine) to a section F.
 - Capture real screens (new-session, permission pop-up, diff, terminal, settings) once a signed-in run is possible without exposing other chats.
 - Sign-in of the standalone `claude` CLI is needed for any real print-mode run; this requires the user.
+
+## F. REA findings on the desktop app (added after the analysis finished)
+
+- **[seen]** `analyze-javascript-application` on a copy of `app.asar` (v6.28899.2) examined all 1,519 files: a Vite-built Electron app whose main process is split into bundles under `.vite/build/` with separate worker bundles (`file-index-worker`, `frame-local-worker`, `heavy-work-worker`), a find-in-page module, and bundled libraries (for example a diagram library under `resources/artifact-libs/`).
+- **[seen]** Large bundles exceeded REA's per-file semantic budget; module and static facts were kept. Saved evidence: `study/desktop-app/app-evidence.json` (git-ignored).
+- **[guess]** The Code tab renderer is remote content hosted by claude.ai rather than bundled UI, since the bundle has no Code-view CSS or layout files of its own. That is why layout was measured from a window capture instead.
+- **[seen]** Lesson for CAELIX: keep the main process small and push file indexing and heavy work into workers; CAELIX defers pane and modal code until first use for the same reason.
