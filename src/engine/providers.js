@@ -132,14 +132,22 @@ let healthFile = null;
 function setHealthFile(f) { healthFile = f; try { const j = JSON.parse(require('fs').readFileSync(f, 'utf8')); for (const [k, v] of Object.entries(j)) if (v && v.until > Date.now()) health.set(k, v); } catch (_) {} }
 function saveHealth() { if (!healthFile) return; try { require('fs').writeFileSync(healthFile, JSON.stringify(Object.fromEntries(health))); } catch (_) {} }
 const hkey = (p, m) => p + '/' + m;
-function isBenched(p, m) { const h = health.get(hkey(p, m)); if (!h) return false; if (h.until <= Date.now()) { health.delete(hkey(p, m)); return false; } return true; }
+function isBenched(p, m) { if (isArchived(p, m)) return true; const h = health.get(hkey(p, m)); if (!h) return false; if (h.until <= Date.now()) { health.delete(hkey(p, m)); return false; } return true; }
 function markFailed(p, m, err) {
   const s = err && err.status; const msg = String((err && err.message) || '');
   // 404 / 401 / 403 / 402 / 400: this model will not work for this account right now -> long rest. 429 / 5xx / network: short rest.
   const hard = [400, 401, 402, 403, 404, 422].includes(s) || /not found for account|no credits|insufficient/i.test(msg);
   health.set(hkey(p, m), { until: Date.now() + (hard ? 6 * 3600e3 : 4 * 60e3), why: msg.slice(0, 120) }); saveHealth();
 }
-function markOk(p, m) { if (health.delete(hkey(p, m))) saveHealth(); }
+// archive: models that do not work on this account. Kept until a later check finds them working again.
+let archive = {}; let archiveFile = null; // { 'provider/model': { provider, id, status, verdict, detail, at } }
+function setArchiveFile(f) { archiveFile = f; try { archive = JSON.parse(require('fs').readFileSync(f, 'utf8')) || {}; } catch (_) { archive = {}; } }
+function saveArchive() { if (archiveFile) try { require('fs').writeFileSync(archiveFile, JSON.stringify(archive, null, 1)); } catch (_) {} }
+const getArchive = () => archive;
+const isArchived = (p, m) => !!archive[hkey(p, m)];
+function unarchive(p, m) { if (archive[hkey(p, m)]) { delete archive[hkey(p, m)]; saveArchive(); } }
+function markOk(p, m) { unarchive(p, m); if (health.delete(hkey(p, m))) saveHealth(); }
+
 const sticky = new Map(); // objective -> {provider, model}
 
 // ---- probe: send a 5-token request to each model to find which ones this key can really use ----
@@ -153,12 +161,16 @@ async function probeModels(providerId, key, overrides, { onProgress, concurrency
       status = r.status; text = (await r.text()).slice(0, 300);
     } catch (e) { text = e.name === 'AbortError' ? 'timed out after 45 s' : String(e.message); }
     clearTimeout(to);
-    const verdict = status === 200 ? 'ok' : status === 404 ? 'not available on this account' : status === 401 || status === 403 ? 'no access (key or terms)' : status === 402 ? 'needs credits' : status === 429 ? 'rate limited (inconclusive)' : status === 400 || status === 422 ? 'not a chat model / rejected request' : status ? 'error ' + status : 'no answer';
+    const verdict = (p.anonymous && !key && [401, 402, 403].includes(status)) ? 'needs your own key (paid model)' : status === 200 ? 'ok' : status === 404 ? 'not available on this account' : status === 401 || status === 403 ? 'no access (key or terms)' : status === 402 ? 'needs credits' : status === 429 ? 'rate limited (inconclusive)' : status === 400 || status === 422 ? 'not a chat model / rejected request' : status ? 'error ' + status : 'no answer';
     const row = { id: m.id, status, verdict, detail: status === 200 ? '' : text.replace(/\s+/g, ' ').slice(0, 160) };
     if (status === 200) markOk(providerId, m.id); else if ([400, 401, 402, 403, 404, 422].includes(status)) markFailed(providerId, m.id, { status, message: text });
     out.push(row); done++; onProgress && onProgress(done, models.length);
   }
   await Promise.all(Array.from({ length: concurrency }, async () => { while (i < models.length) await one(models[i++]); }));
+  // keep a lasting record of the ones that cannot work; skip inconclusive answers (timeouts, rate limits, overload)
+  const keyBad = out.length > 3 && out.every((r) => r.status === 401 || r.status === 403);
+  if (!keyBad) for (const r of out) { if (r.status === 200) unarchive(providerId, r.id); else if ([400, 402, 404, 422, 500].includes(r.status) || r.status === 401 || r.status === 403) archive[hkey(providerId, r.id)] = { provider: providerId, id: r.id, status: r.status, verdict: r.verdict, detail: r.detail, at: new Date().toISOString() }; }
+  saveArchive();
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -195,4 +207,4 @@ function routeCandidates(objective, byProvider) {
   return list.sort((a, b) => b.s - a.s);
 }
 
-module.exports = { probeModels, setHealthFile, isBenched, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };
+module.exports = { setArchiveFile, getArchive, isArchived, unarchive, probeModels, setHealthFile, isBenched, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };

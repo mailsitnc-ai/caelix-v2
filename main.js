@@ -73,9 +73,10 @@ function record(L, e) {
   }
 }
 
+function initStores() { const { providers } = E(); if (providers.__hf) return; providers.__hf = true; providers.setHealthFile(path.join(userDir(), 'model-health.json')); providers.setArchiveFile(path.join(userDir(), 'model-archive.json')); }
 function envFor(L) {
   const { providers, config } = E();
-  if (!providers.__hf) { providers.__hf = true; providers.setHealthFile(path.join(userDir(), 'model-health.json')); }
+  initStores();
   const settings = config.loadSettings(userDir(), L.rt.st.cwd);
   return {
     userDir: userDir(), settings, signal: L.ctrl.signal, docsDir: CHAT_DIR, renderDocument,
@@ -127,7 +128,9 @@ function registerIpc() {
   handle('keys:remove', (id) => { keys.remove(id); return providerState(); });
   handle('keys:base', (id, url) => { const pv = readProv(); pv.bases = pv.bases || {}; if (url) pv.bases[id] = url.trim(); else delete pv.bases[id]; writeProv(pv); return providerState(); });
   handle('models:list', async (pid, force) => { const { providers } = E(); return providers.listModels(pid, keys.get(pid), readProv().bases, { force }); });
-  handle('models:probe', async (pid) => { const { providers } = E(); providers.setHealthFile(path.join(userDir(), 'model-health.json')); return providers.probeModels(pid, keys.get(pid), readProv().bases, { onProgress: (d, n) => win && win.webContents.send('probe:progress', { pid, d, n }) }); });
+  handle('models:archive', () => { initStores(); return E().providers.getArchive(); });
+  handle('models:unarchive', (pid, id) => { initStores(); E().providers.unarchive(pid, id); return E().providers.getArchive(); });
+  handle('models:probe', async (pid) => { initStores(); const { providers } = E(); return providers.probeModels(pid, keys.get(pid), readProv().bases, { onProgress: (d, n) => win && win.webContents.send('probe:progress', { pid, d, n }) }); });
   handle('last:set', (patch) => { const pv = readProv(); pv.last = { ...(pv.last || {}), ...patch }; writeProv(pv); return true; });
 
   handle('session:new', ({ cwd, provider, model, mode, kind }) => {
@@ -305,9 +308,16 @@ app.whenReady().then(() => {
   app.setAboutPanelOptions({ applicationName: 'CAELIX', applicationVersion: '2.0.0', copyright: 'CAELIX', iconPath: ICON });
   if (process.platform === 'darwin' && app.dock) { try { app.dock.setIcon(nativeImage.createFromPath(ICON)); } catch (_) {} }
   const pi = process.argv.indexOf('--probe');
-  if (pi > 0) { // headless: caelix --probe <provider>  -> writes checks/probe-<provider>.json and quits
-    const pid = process.argv[pi + 1]; const { providers } = E(); providers.setHealthFile(path.join(userDir(), 'model-health.json'));
-    providers.probeModels(pid, keys.get(pid), readProv().bases, {}).then((r) => { fs.writeFileSync(path.join(userDir(), 'probe-' + pid + '.json'), JSON.stringify(r, null, 1)); app.quit(); }).catch((e) => { fs.writeFileSync(path.join(userDir(), 'probe-' + pid + '.json'), JSON.stringify({ error: String(e.message) })); app.quit(); });
+  if (pi > 0) { // headless: caelix --probe <provider|all>  -> writes probe-<provider>.json (and the archive) in the data folder, then quits
+    initStores(); const { providers } = E(); const arg = process.argv[pi + 1];
+    const pids = arg === 'all' ? providers.PROVIDERS.filter((p) => !p.virtual && !p.hidden && (keys.has(p.id) || p.anonymous)).map((p) => p.id) : [arg];
+    (async () => {
+      for (const pid of pids) {
+        let res; try { res = await providers.probeModels(pid, keys.get(pid), readProv().bases, { concurrency: 12 }); } catch (e) { res = { error: String(e.message) }; }
+        fs.writeFileSync(path.join(userDir(), 'probe-' + pid + '.json'), JSON.stringify(res, null, 1));
+      }
+      fs.writeFileSync(path.join(userDir(), 'probe-done.txt'), new Date().toISOString()); app.quit();
+    })();
     return;
   }
   buildMenu(); registerIpc(); createWindow();

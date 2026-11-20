@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const inv = (ch) => (...a) => ipcRenderer.invoke(ch, ...a).then((r) => { if (r && r.__error) throw new Error(r.__error); return r; });
 const on = (ch, cb) => { const f = (_e, p) => cb(p); ipcRenderer.on(ch, f); return () => ipcRenderer.removeListener(ch, f); };
 contextBridge.exposeInMainWorld('caelix', {
-  init: inv('app:init'), setKey: inv('keys:set'), removeKey: inv('keys:remove'), setBase: inv('keys:base'), models: inv('models:list'), probe: inv('models:probe'), onProbe: (f) => ipcRenderer.on('probe:progress', (_e, d) => f(d)), setLast: inv('last:set'),
+  init: inv('app:init'), setKey: inv('keys:set'), removeKey: inv('keys:remove'), setBase: inv('keys:base'), models: inv('models:list'), probe: inv('models:probe'), archive: inv('models:archive'), unarchive: inv('models:unarchive'), onProbe: (f) => ipcRenderer.on('probe:progress', (_e, d) => f(d)), setLast: inv('last:set'),
   newSession: inv('session:new'), openSession: inv('session:open'), listSessions: inv('session:list'), setSession: inv('session:set'), deleteSession: inv('session:delete'), forkSession: inv('session:fork'),
   send: inv('chat:send'), stop: inv('chat:stop'), answer: inv('chat:answer'), compact: inv('chat:compact'), rewind: inv('chat:rewind'), clear: inv('chat:clear'), side: inv('chat:side'), exportChat: inv('chat:export'),
   addNote: inv('memory:add'), showMemory: inv('memory:show'), initProject: inv('init:project'),

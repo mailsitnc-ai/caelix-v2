@@ -55,17 +55,25 @@
       r.innerHTML = `<span class="dot" style="background:${DOT[g.id] || '#4d9bff'}"></span><div><span class="mn">${esc(m.id)}</span>${(m.free ? '<span class="md"> Free</span>' : '') + (m.desc ? `<span class="md"> · ${esc(m.desc)}</span>` : '')}</div><button class="star ${favs.has(key) ? 'on' : ''}" title="Favorite">★</button>`;
       r.onclick = (e) => { if (e.target.closest('.star')) { e.stopPropagation(); api.toggleFav(key).then((f) => { favs = new Set(f); S.fav = f; draw(); }); return; } window.setModel(g.id, m.id); close(); }; return r;
     }
+    let arch = {}; let showArch = false; api.archive().then((a) => { arch = a || {}; draw(); }).catch(() => {});
+    const isArch = (pid, id) => !!arch[pid + '/' + id];
     function draw() {
       const q = inp.value.trim().toLowerCase(); list.innerHTML = '';
       const match = (m) => !q || m.id.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q) || (m.desc || '').toLowerCase().includes(q);
-      const fav = []; for (const g of groups) for (const m of g.models || []) if (favs.has(g.id + '|' + m.id) && match(m)) fav.push([g, m]);
+      const fav = []; for (const g of groups) for (const m of g.models || []) if (favs.has(g.id + '|' + m.id) && match(m) && !isArch(g.id, m.id)) fav.push([g, m]);
       if (fav.length) { list.appendChild(el('div', 'mg', `★ FAVORITES (${fav.length})`)); fav.forEach(([g, m]) => list.appendChild(item(g, m))); }
       for (const g of groups) {
-        const ms = (g.models || []).filter(match); if (q && !ms.length) continue;
+        const ms = (g.models || []).filter((m) => match(m) && !isArch(g.id, m.id)); if (q && !ms.length) continue;
         list.appendChild(el('div', 'mg', `${esc(g.name.toUpperCase())} (${g.loading ? '…' : ms.length})${g.err ? `<span class="why">${esc(g.err)}</span>` : ''}`));
         if (g.loading) list.appendChild(el('div', 'info', 'Loading models…'));
         ms.slice(0, q ? 300 : 120).forEach((m) => list.appendChild(item(g, m)));
         if (!q && ms.length > 120) list.appendChild(el('div', 'info', `${ms.length - 120} more: type to search`));
+      }
+      const ar = Object.values(arch).filter((a) => !q || a.id.toLowerCase().includes(q));
+      if (ar.length) {
+        const h = el('div', 'mg', `${showArch ? '▾' : '▸'} ARCHIVED — not working on your account (${ar.length})`); h.style.cursor = 'pointer'; h.onclick = () => { showArch = !showArch; draw(); }; list.appendChild(h);
+        if (showArch) { list.appendChild(el('div', 'info', 'Kept in case they work later. Run Check models on the Keys screen again to re-test them; any that now work move back automatically.'));
+          ar.sort((a, b) => (a.provider + a.id).localeCompare(b.provider + b.id)).forEach((a) => { const r = el('div', 'mi'); r.style.opacity = '.7'; r.innerHTML = `<span class="dot" style="background:${DOT[a.provider] || '#4d9bff'}"></span><div><span class="mn">${esc(a.id)}</span><span class="md"> · ${esc(a.provider)} · ${esc(a.verdict)} · checked ${esc((a.at || '').slice(0, 10))}</span></div>`; const b = el('button', 'star', 'Restore'); b.title = 'Move back to the normal list'; b.style.width = 'auto'; b.onclick = (e) => { e.stopPropagation(); api.unarchive(a.provider, a.id).then((x) => { arch = x || {}; draw(); }); }; r.appendChild(b); list.appendChild(r); }); }
       }
       const missing = S.providers.filter((p) => !p.virtual && !p.hasKey && !p.anonymous);
       if (!q && missing.length) { const d = el('div', 'mg', 'Not connected'); const n = el('div', 'info', 'Add a key to load models from: ' + esc(missing.map((p) => p.name).join(', ')) + ' — '); const l = el('a', null, 'open Keys'); l.href = '#'; l.style.color = 'var(--accent2)'; l.onclick = (e) => { e.preventDefault(); close(); keys(); }; n.appendChild(l); list.append(d, n); }
