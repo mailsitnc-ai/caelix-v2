@@ -48,7 +48,7 @@ Same layout, panels, sizes and flow. Verified by side-by-side screenshot compari
 ## 6. Identity
 
 - Name: **CAELIX** (window title, menus, app metadata, package config, interface, installed app, desktop shortcut).
-- Icon: the supplied CAELIX star icon, used as-is (v2 redesign: `assets/source/caelix-icon-blue-original.webp`); sizes and `.icns` generated from it by `scripts/make-icons.py`. No generated or substitute icon.
+- Icon: the supplied CAELIX star icon, used as-is (current: `assets/source/caelix-icon-minimal-original.webp`); sizes and `.icns` generated from it by `scripts/make-icons.py`. No generated or substitute icon.
 - No Claude or Anthropic names or logos in the product, except where needed to name a supported provider or explain compatibility.
 
 ## Technology
@@ -62,4 +62,4 @@ Electron with plain HTML, CSS and JavaScript. No React, no build tools, no packa
 - **2,000,000-token context.** `/reset` summarises everything, keeps memory, and returns the token count to baseline; it also runs automatically at 80%. `/compact` (also `/compat`) summarises older messages only. Context panel shows the breakdown.
 - **Commands:** /reset /compact /compat /btw /clear /new /chat /code /model /mode /plan /team /agents /rename /rewind /diff /terminal /browser /files /context /cost /memory /remember /init /export /copy /skills /hooks /mcp /keys /settings /system /docs /fork /theme /view /help.
 - **MCP manager** (stdio and HTTP, project and user scopes, import, quick-add, reconnect) with built-in `desktop` and `memory` servers. **Hooks manager** (events, matcher, scope, presets).
-- **New logo:** the supplied blue star icon (`assets/source/caelix-icon-blue-original.webp`).
+- **Logo:** the supplied minimal dark squircle with a glowing star (`assets/source/caelix-icon-minimal-original.webp`), used for the window, Dock, app bundle, installer shortcut and every in-app logo.

@@ -15,7 +15,7 @@ CAELIX (v2) is our own desktop coding-agent app. See `features.md` for what it m
 ## Identity
 
 - The application is named **CAELIX** everywhere: window title, app metadata, package configuration and interface.
-- The official icon is the supplied blue star image: `assets/source/caelix-icon-blue-original.webp` (the earlier orange one is kept in `assets/source/` for history). Do not replace, redraw or regenerate it. All sizes are produced from it by `scripts/make-icons.py` into `assets/icons/`.
+- The official icon is the supplied minimal logo, a dark squircle with a glowing four-point star: `assets/source/caelix-icon-minimal-original.webp` (earlier orange and blue logos are kept in `assets/source/` for history). Do not replace, redraw or regenerate it. All sizes are produced from it by `scripts/make-icons.py` into `assets/icons/`.
 - No Claude or Anthropic branding, names or logos, except where needed to identify a supported provider or explain compatibility.
 
 ## Folders
