@@ -46,13 +46,16 @@ async function callModel(rt, env, messages, tools, onText, onThinking) {
     const cands = providers.routeCandidates(rt.model, by);
     if (!cands.length) throw new Error('OmniRoute has no connected providers yet. Add a key on the Keys screen.');
     let lastErr;
-    for (const cand of cands.slice(0, 6)) {
+    const sk = providers.sticky.get(rt.model);
+    if (sk) { const i = cands.findIndex((x) => x.provider === sk.provider && x.model === sk.model); if (i > 0) cands.unshift(...cands.splice(i, 1)); }
+    for (const cand of cands.slice(0, 8)) {
       const cr = env.getCreds(cand.provider);
       env.emit({ type: 'route', provider: cand.provider, model: cand.model });
       try {
         let started = false;
-        return await providers.streamChat({ ...args, onText: (t) => { started = true; onText && onText(t); }, provider: cand.provider, key: cr.key, base: cr.base, model: cand.model });
-      } catch (e) { if (e.name === 'AbortError') throw e; lastErr = e; env.emit({ type: 'route_fail', provider: cand.provider, model: cand.model, error: String(e.message).slice(0, 160) }); }
+        const out = await providers.streamChat({ ...args, onText: (t) => { started = true; onText && onText(t); }, provider: cand.provider, key: cr.key, base: cr.base, model: cand.model });
+        providers.markOk(cand.provider, cand.model); providers.sticky.set(rt.model, { provider: cand.provider, model: cand.model }); return out;
+      } catch (e) { if (e.name === 'AbortError' || started) throw e; lastErr = e; providers.markFailed(cand.provider, cand.model, e); env.emit({ type: 'route_fail', provider: cand.provider, model: cand.model, error: String(e.message).slice(0, 160) }); }
     }
     throw lastErr || new Error('OmniRoute failed');
   }

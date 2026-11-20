@@ -75,6 +75,7 @@ function record(L, e) {
 
 function envFor(L) {
   const { providers, config } = E();
+  if (!providers.__hf) { providers.__hf = true; providers.setHealthFile(path.join(userDir(), 'model-health.json')); }
   const settings = config.loadSettings(userDir(), L.rt.st.cwd);
   return {
     userDir: userDir(), settings, signal: L.ctrl.signal, docsDir: CHAT_DIR, renderDocument,

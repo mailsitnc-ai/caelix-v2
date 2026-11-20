@@ -64,6 +64,7 @@ async function listModels(providerId, key, overrides, { force } = {}) {
       free: m.pricing ? (Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0) : /:free$/.test(m.id),
     }));
   }
+  if (p.id === 'nvidia') models = models.filter((m) => !RE.bad.test(m.id)); // NIM lists embedding / safety / vision-only functions that cannot chat
   models.sort((a, b) => a.id.localeCompare(b.id));
   modelCache.set(providerId, { at: Date.now(), models });
   return models;
@@ -75,11 +76,16 @@ async function streamChat({ provider, key, base, model, messages, tools, signal,
   const url = (base || p.base).replace(/\/+$/, '') + '/chat/completions';
   const body = { model, messages, stream: true, stream_options: { include_usage: true } };
   if (tools && tools.length) { body.tools = tools; body.tool_choice = 'auto'; }
-  if (maxTokens) body.max_tokens = maxTokens;
+  if (maxTokens) body.max_tokens = maxTokens; else if (provider === 'openrouter') body.max_tokens = 8192; // OpenRouter otherwise reserves the model's full output size and refuses with 402 when credits are low
   if (effort && provider === 'openrouter') body.reasoning = { effort };
   let res;
   for (let attempt = 0; ; attempt++) {
     res = await fetch(url, { method: 'POST', headers: headers(p, key), body: JSON.stringify(body), signal });
+    if (res.status === 402 && provider === 'openrouter' && attempt < 2) {
+      const t402 = await res.text().catch(() => ''); const m = /afford (\d+)/.exec(t402); const can = m ? Number(m[1]) : 0;
+      if (can >= 256) { body.max_tokens = Math.max(256, can - 64); continue; }
+      const e = new Error(`${p.name}: HTTP 402 ${t402.slice(0, 300)}`); e.status = 402; throw e;
+    }
     if (res.status === 429 && attempt < 2) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
     break;
   }
@@ -120,12 +126,28 @@ async function streamChat({ provider, key, base, model, messages, tools, signal,
   return out;
 }
 
+// ---- model health: remember models that cannot work so routing stops retrying them ----
+const health = new Map(); // 'provider/model' -> { until, why }
+let healthFile = null;
+function setHealthFile(f) { healthFile = f; try { const j = JSON.parse(require('fs').readFileSync(f, 'utf8')); for (const [k, v] of Object.entries(j)) if (v && v.until > Date.now()) health.set(k, v); } catch (_) {} }
+function saveHealth() { if (!healthFile) return; try { require('fs').writeFileSync(healthFile, JSON.stringify(Object.fromEntries(health))); } catch (_) {} }
+const hkey = (p, m) => p + '/' + m;
+function isBenched(p, m) { const h = health.get(hkey(p, m)); if (!h) return false; if (h.until <= Date.now()) { health.delete(hkey(p, m)); return false; } return true; }
+function markFailed(p, m, err) {
+  const s = err && err.status; const msg = String((err && err.message) || '');
+  // 404 / 401 / 403 / 402 / 400: this model will not work for this account right now -> long rest. 429 / 5xx / network: short rest.
+  const hard = [400, 401, 402, 403, 404, 422].includes(s) || /not found for account|no credits|insufficient/i.test(msg);
+  health.set(hkey(p, m), { until: Date.now() + (hard ? 6 * 3600e3 : 4 * 60e3), why: msg.slice(0, 120) }); saveHealth();
+}
+function markOk(p, m) { if (health.delete(hkey(p, m))) saveHealth(); }
+const sticky = new Map(); // objective -> {provider, model}
+
 // ---- OmniRoute: pick ordered candidates by objective across connected providers ----
 const RE = {
   coding: /coder|code|qwen3?-?.*(480|235|32)|deepseek|gpt-oss|kimi|glm|minimax|gemini.*pro|devstral|codestral/i,
   fast: /instant|flash|lite|mini|small|8b|haiku|turbo|nano/i,
   smart: /pro|opus|sonnet|405b|r1|gpt-5|o3|large|ultra|thinking|reason|480b|235b|70b|120b/i,
-  bad: /embed|rerank|whisper|tts|image|vision-only|guard|moderation|safety|audio|speech|diffusion|flux|sdxl|clip|ocr|parse/i,
+  bad: /cosmos|reason2|nemoguard|content-safety|topic-control|retriev|reward|riva|parakeet|canary|nv-embed|neva|paligemma|kosmos|fuyu|deplot|vila|nvclip|clip|embed|rerank|whisper|tts|image|vision-only|guard|moderation|safety|audio|speech|diffusion|flux|sdxl|clip|ocr|parse/i,
 };
 function score(obj, m) {
   if (RE.bad.test(m.id)) return -1;
@@ -144,9 +166,9 @@ function routeCandidates(objective, byProvider) {
   for (const [pid, models] of Object.entries(byProvider)) {
     if (pid === 'omniroute' || pid === 'pretend') continue;
     const ranked = models.map((m) => ({ ...m, s: score(obj, m) })).filter((m) => m.s >= 0).sort((a, b) => b.s - a.s);
-    ranked.slice(0, 2).forEach((m, i) => list.push({ provider: pid, model: m.id, s: m.s - i * 0.5 - (byId(pid) && byId(pid).anonymous ? 3 : 0) }));
+    ranked.filter((m) => !isBenched(pid, m.id)).slice(0, 3).forEach((m, i) => list.push({ provider: pid, model: m.id, s: m.s - i * 0.5 - (byId(pid) && byId(pid).anonymous ? 3 : 0) }));
   }
   return list.sort((a, b) => b.s - a.s);
 }
 
-module.exports = { PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };
+module.exports = { setHealthFile, isBenched, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };

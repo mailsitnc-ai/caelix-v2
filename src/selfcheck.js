@@ -191,6 +191,10 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     pass('OmniRoute: coding prefers a coder model', /coder/.test(coding.model), coding.model);
     pass('OmniRoute: smart prefers a strong model', /pro|gpt-5/.test(smart.model), smart.model);
     pass('OmniRoute: no connected providers gives no candidates', providers.routeCandidates('auto', {}).length === 0);
+    { const m = [{ id: 'nvidia/cosmos-reason2-8b', provider: 'nvidia' }, { id: 'meta/llama-3.3-70b-instruct', provider: 'nvidia' }]; const c1 = providers.routeCandidates('auto/coding', { nvidia: m });
+      pass('OmniRoute never picks non-chat models such as cosmos-reason2', !c1.some((c) => /cosmos/.test(c.model)));
+      providers.markFailed('nvidia', 'meta/llama-3.3-70b-instruct', { status: 404, message: 'not found' }); const c2 = providers.routeCandidates('auto/coding', { nvidia: m });
+      pass('OmniRoute stops retrying a model that returned 404', c2.length === 0); providers.markOk('nvidia', 'meta/llama-3.3-70b-instruct'); }
 
     const { newRuntime } = require('./engine/runtime'); const agent = require('./engine/agent'); const config = require('./engine/config'); const { connectAll } = require('./engine/mcp');
     async function engineTurn(cwd, mode, script, o) {
