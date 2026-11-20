@@ -200,6 +200,14 @@
     const b = el('div'); b.innerHTML = rows.map(([k, d]) => `<div class="pi"><span class="kbd">${k}</span><span class="d">${d}</span></div>`).join(''); dialog('Keyboard shortcuts', 'Type / in the composer for every command.', b, []);
   }
 
+  function askText(title, initial, sub) {
+    return new Promise((resolve) => {
+      const body = el('div'); const inp = document.createElement('input'); inp.type = 'text'; inp.value = initial || ''; inp.maxLength = 120; inp.style.cssText = 'width:100%;padding:11px 13px;border-radius:12px;border:1px solid var(--border2);background:var(--glass3);color:inherit;font:inherit;outline:none';
+      body.appendChild(inp); let done = false; const fin = (v) => { if (done) return; done = true; host().innerHTML = ''; resolve(v); };
+      const ok = btn('Save', 'pri', () => fin(inp.value.trim() || null)); inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); ok.click(); } if (e.key === 'Escape') fin(null); };
+      dialog(title, sub || '', body, [btn('Cancel', '', () => fin(null)), ok], { width: '520px' }); setTimeout(() => { inp.focus(); inp.select(); }, 30);
+    });
+  }
   function team() {
     const cur = S.cur || S.draft; let on = !!cur.team; let coder = cur.coder || { provider: cur.provider, model: cur.model }; let reviewer = cur.reviewer || null;
     const body = el('div'); const save = async () => {
@@ -218,5 +226,5 @@
     }
     draw(); dialog('Team mode', 'Pick one model to write code and a different one to review it.', body, [btn('Cancel', '', () => (host().innerHTML = '')), btn('Save', 'pri', async () => { if (await save()) host().innerHTML = ''; })], { width: '620px' });
   }
-  window.Modals = { team, keys, modelPicker, mcp, hooks, memory, system, permission, rewind, side, sideAppend, settings, help };
+  window.Modals = { askText, team, keys, modelPicker, mcp, hooks, memory, system, permission, rewind, side, sideAppend, settings, help };
 })();

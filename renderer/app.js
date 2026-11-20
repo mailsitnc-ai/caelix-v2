@@ -54,7 +54,7 @@
   }
   async function refreshSessions() { S.sessions = await api.listSessions(); renderSidebar(); }
   function sessionMenu(s, anchor) {
-    popMenu(anchor, [['Rename…', async () => { const t = prompt('Rename', s.title); if (t) { await api.setSession(s.id, { title: t }); if (S.cur && S.cur.id === s.id) { S.cur.title = t; setTitle(); } refreshSessions(); } }],
+    popMenu(anchor, [['Rename…', async () => { await window.lazy('modals'); const t = await window.Modals.askText('Rename chat', s.title); if (t) { await api.setSession(s.id, { title: t }); if (S.cur && S.cur.id === s.id) { S.cur.title = t; setTitle(); } refreshSessions(); } }],
       [s.pinned ? 'Unpin' : 'Pin', async () => { await api.setSession(s.id, { pinned: !s.pinned }); refreshSessions(); }],
       ['Fork', async () => { const r = await api.forkSession(s.id); await refreshSessions(); openSession(r.id); }],
       [s.archived ? 'Unarchive' : 'Archive', async () => { await api.setSession(s.id, { archived: !s.archived }); if (S.cur && S.cur.id === s.id && !s.archived) newScreen(); refreshSessions(); }],
@@ -101,7 +101,7 @@
   window.updateChips = updateChips;
 
   // ---------- kind (Chat / Code) ----------
-  function setKind(k, silent) { if (S.kind === k && !silent) return; S.kind = k; api.setLast({ kind: k }); newScreen(); }
+  function setKind(k, silent) { if (S.kind === k && !silent) return; S.kind = k; api.setLast({ kind: k }); if (k === 'code') S.draft.cwd = ''; newScreen(); }
   $('#seg-chat').onclick = () => setKind('chat'); $('#seg-code').onclick = () => setKind('code');
 
   // ---------- screens ----------
@@ -334,11 +334,11 @@
       case '/reset': { addNotice('info', 'Resetting context…'); const r = await api.resetChat(S.cur.id); S.ctx = r.ctx; S.bd = r.breakdown; await openSession(S.cur.id); toast(r.ok ? 'Context reset: summary and memory kept' : 'Nothing to reset yet'); break; }
       case '/compact': { addNotice('info', 'Compacting…'); const r = await api.compact(S.cur.id); S.ctx = r.ctx; addNotice('info', r.ok ? 'Compacted.' : 'Nothing to compact yet.'); updateChips(); break; }
       case '/clear': await api.clear(S.cur.id); S.items = []; S.todos = []; S.ctx = 0; renderTranscript(); updateChips(); break;
-      case '/new': newScreen(); break; case '/chat': setKind('chat'); break; case '/code': setKind('code'); break;
+      case '/new': $('#btn-new').click(); break; case '/chat': setKind('chat'); break; case '/code': setKind('code'); break;
       case '/model': $('#chip-model').click(); break; case '/mode': if (isCode()) modeMenu(); else toast('Chat has no permission modes'); break;
       case '/plan': if (isCode()) { setMode('plan'); toast('Plan mode on'); } break; case '/team': $('#chip-team').click(); break;
       case '/agents': $('#btn-agents').click(); break;
-      case '/rename': if (arg) { await api.setSession(S.cur.id, { title: arg }); S.cur.title = arg; setTitle(); refreshSessions(); } else toast('Usage: /rename <title>'); break;
+      case '/rename': if (arg) { await api.setSession(S.cur.id, { title: arg }); S.cur.title = arg; setTitle(); refreshSessions(); } else { await window.lazy('modals'); const t = await window.Modals.askText('Rename chat', S.cur.title); if (t) { await api.setSession(S.cur.id, { title: t }); S.cur.title = t; setTitle(); refreshSessions(); } } break;
       case '/rewind': window.lazy('modals').then(() => window.Modals.rewind()); break;
       case '/diff': openPane('diff'); break; case '/terminal': openPane('terminal'); break; case '/browser': openPane('browser'); break; case '/files': openPane('files'); break;
       case '/context': openPane('context'); break;
@@ -371,7 +371,7 @@
   $('#btn-browser').onclick = () => openPane('browser'); $('#btn-panel').onclick = () => (S.pane ? closeAllPanes() : openPane(S.lastPane || 'context'));
   $('#btn-keys').onclick = () => window.lazy('modals').then(() => window.Modals.keys()); $('#btn-mcp').onclick = () => window.lazy('modals').then(() => window.Modals.mcp()); $('#btn-hooks').onclick = () => window.lazy('modals').then(() => window.Modals.hooks());
   $('#btn-theme').onclick = () => window.toggleTheme(); $('#tb-sidebar').onclick = () => $('#sidebar').classList.toggle('collapsed');
-  $('#title-btn').onclick = () => { if (!S.cur) return; const t = prompt('Rename', S.cur.title); if (t) runSlash('/rename ' + t); };
+  $('#title-btn').onclick = async () => { if (!S.cur) { toast('Send a first message, then you can rename the chat'); return; } await window.lazy('modals'); const t = await window.Modals.askText('Rename chat', S.cur.title); if (t) runSlash('/rename ' + t); };
   async function refreshChanges() { if (!S.cur || !isCode()) { S.changes = []; return; } try { S.changes = await api.diff(S.cur.id); } catch (_) { S.changes = []; } if (S.pane === 'diff' && window.Panes) window.Panes.refresh(); }
   window.refreshChanges = refreshChanges;
 
@@ -393,14 +393,14 @@
     else if (openPop && /^[1-9]$/.test(e.key)) { const it = openPop.children[+e.key - 1]; if (it) { e.preventDefault(); it.click(); } }
     else if (e.key === 'Escape' && openPop) closePop();
   });
-  $('#btn-new').onclick = newScreen; $('#search').addEventListener('input', (e) => { S.filter = e.target.value; renderSidebar(); });
+  $('#btn-new').onclick = () => { if (isCode()) S.draft.cwd = ''; newScreen(); }; // a new Code session always starts by choosing a folder $('#search').addEventListener('input', (e) => { S.filter = e.target.value; renderSidebar(); });
   document.addEventListener('click', (e) => { const a = e.target.closest('a[data-ext]'); if (a) { e.preventDefault(); api.openUrl(a.href); } });
 
   // ---------- boot ----------
   (async function boot() {
     const info = await api.init(); S.providers = info.providers; S.sessions = info.sessions; S.info = info; S.fav = info.fav || [];
     const st = await api.getSettings(info.home).catch(() => ({})); applyTheme(st.theme || 'dark'); S.view = st.viewMode || 'normal'; document.body.classList.add('view-' + S.view);
-    const l = info.last || {}; S.draft.cwd = l.cwd || ''; if (l.provider) { S.draft.provider = l.provider; S.draft.model = l.model || 'auto'; } if (l.mode) S.draft.mode = l.mode; if (st.defaultMode && !l.mode) S.draft.mode = st.defaultMode;
+    const l = info.last || {}; S.draft.cwd = ''; if (l.provider) { S.draft.provider = l.provider; S.draft.model = l.model || 'auto'; } if (l.mode) S.draft.mode = l.mode; if (st.defaultMode && !l.mode) S.draft.mode = st.defaultMode;
     S.kind = l.kind === 'code' ? 'code' : 'chat'; if (S.draft.cwd && !S.sessions.some((s) => s.cwd === S.draft.cwd)) S.draft.cwd = S.draft.cwd;
     renderSidebar(); newScreen(); api.uiReady();
     if (!S.providers.some((p) => !p.virtual && p.hasKey) && !S.sessions.length) setTimeout(() => toast('Tip: open Keys to add a provider key and load its models'), 700);

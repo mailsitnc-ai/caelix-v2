@@ -282,7 +282,14 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     pass('Images: the sent message shows the picture and the strip is cleared', await ev(`document.querySelectorAll('.msg.user img').length===1 && document.querySelector('#attach-strip').hidden`));
     const ttl = await ev(`window.S.cur.title`); pass('Auto-naming: a new chat gets a short name from its first message', ttl !== 'New chat' && ttl.length <= 48 && /birthday/i.test(ttl), ttl);
     pass('Auto-naming: the sidebar shows the name', await ev(`Array.from(document.querySelectorAll('.srow')).some(r=>/birthday/i.test(r.textContent))`)); await shot('31-auto-named');
+    // rename through the in-app dialog (the old prompt() does not exist in Electron)
+    await click('#title-btn'); await until(`document.querySelector('.modal input[type=text]')`, 8000, 'rename dialog');
+    await ev(`(()=>{const i=document.querySelector('.modal input[type=text]'); i.value='Party plan'; document.querySelector('.modal footer .pri').click(); return 1})()`); await sleep(500);
+    pass('Renaming a chat works from the title (dialog, then saved)', (await ev(`window.S.cur.title`)) === 'Party plan' && (await ev(`document.querySelector('#title-text').textContent`)) === 'Party plan'); await shot('33-renamed');
+    const sidRn = await ev(`window.S.cur.id`); const rn = await ev(`window.caelix.listSessions()`); pass('The new name is saved on disk', rn.some((s) => s.id === sidRn && s.title === 'Party plan'));
     await click('#seg-code'); await sleep(300);
+    await click('#btn-new'); await sleep(300);
+    pass('Code: New session asks for a folder again instead of reusing the last one', await ev(`window.S.kind==='code' && !window.S.draft.cwd && !document.querySelector('#new-folder').hidden && document.querySelector('#input').disabled`));
     await ev(`window.lazy('modals').then(()=>window.Modals.team())`); await until(`document.querySelector('.modal') && document.querySelector('.modal').innerText.includes('Team mode')`, 8000, 'team dialog');
     await ev(`document.querySelector('.modal input[type=checkbox]').click()`); await sleep(200);
     pass('Team dialog asks for a coder and a reviewer model', await ev(`(()=>{const t=document.querySelector('.modal').innerText;return t.includes('Coder')&&t.includes('Reviewer')})()`)); await shot('32-team-dialog'); await ev(`document.querySelector('#modal-host').innerHTML=''`);
