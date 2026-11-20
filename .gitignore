@@ -1,0 +1,24 @@
+# installed packages
+node_modules/
+# built apps and installers
+dist/
+out/
+build/
+*.app
+*.dmg
+*.pkg
+*.zip
+# the study and checks folders
+study/
+checks/
+# keys and secrets
+.env
+.env.*
+*.key
+*.pem
+keys.json
+*.keys
+secrets*
+# system
+.DS_Store
+*.log
