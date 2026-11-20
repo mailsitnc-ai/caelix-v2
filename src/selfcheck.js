@@ -140,7 +140,7 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     // ---------- Keys, MCP, Hooks, models ----------
     await click('#btn-keys'); await until(`document.querySelectorAll('.prow').length>=10`, 8000, 'keys screen'); await shot('14-keys-screen');
     const rows = await ev(`Array.from(document.querySelectorAll('.prow .pt')).map(e=>e.innerText.trim())`);
-    const wantP = ['Google Gemini', 'OpenRouter', 'NVIDIA NIM', 'Groq', 'CoArena', 'Kilo Gateway', 'OpenCode Zen', 'Numes', 'Abliteration AI', 'OmniRoute'];
+    const wantP = ['Google Gemini', 'OpenRouter', 'NVIDIA NIM', 'Groq', 'Z.ai GLM', 'CoArena', 'Kilo Gateway', 'OpenCode Zen', 'Numes', 'Abliteration AI', 'OmniRoute'];
     pass('Keys screen lists all ten providers', wantP.every((p) => rows.some((r) => r.startsWith(p))), rows.join(' | '));
     const fake = 'gsk_selfcheck_1234'; await ev(`(function(){const r=Array.from(document.querySelectorAll('.prow')).find(x=>x.innerText.trim().startsWith('Groq')); const i=r.querySelector('input[type=password]'); i.value=${JSON.stringify(fake)}; r.querySelector('.btn.pri').click(); return 1})()`);
     await until(`document.body.innerText.includes('••••1234')`, 10000, 'masked key'); await sleep(300);
@@ -212,6 +212,32 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     const fp2 = await engineTurn(work, 'bypassPermissions', [{ say: 'x', tools: [{ name: 'Bash', input: { command: 'echo "git push --force" >/dev/null; echo ran' } }] }, { say: 'y' }]);
     pass('a disabled hook no longer runs', fp2.evs.some((e) => e.type === 'tool_result' && /ran/.test(e.output)));
     await ev(`window.caelix.hooksRemove(${JSON.stringify(work)}, ${JSON.stringify(hid)}, 'user')`); pass('hooks can be removed', !(await ev(`window.caelix.hooksList(${JSON.stringify(work)})`)).some((h) => h.id === hid));
+    // ---- team mode (coder + reviewer), images, auto-naming ----
+    { const wfile = require('path').join(work, 'team-out.txt');
+      const rtT = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'bypassPermissions', kind: 'code' }); rtT.team = true; rtT.coder = { provider: 'pretend', model: 'coder-x' }; rtT.reviewer = { provider: 'pretend', model: 'reviewer-y' };
+      const evsT = []; const stT = config.loadSettings(userDir(), work);
+      const envT = { userDir: userDir(), settings: stT, signal: new AbortController().signal, getCreds: () => ({}), connected: () => [], bases: () => ({}), ask: async () => ({ decision: 'deny' }), emit: (e) => evsT.push(e) };
+      rtT.mcp = await connectAll(stT.mcpServers, work, { userDir: userDir(), disabled: stT.builtinOff });
+      await agent.runTurn(rtT, envT, 'go PRETEND: ' + JSON.stringify([{ say: 'writing', tools: [{ name: 'Write', input: { file_path: wfile, content: 'hello' } }] }, { say: 'done coding' }]) + ' PRETEND_REVIEW: CHANGES NEEDED'); rtT.mcp.stop();
+      const infos = evsT.filter((e) => e.type === 'info').map((e) => e.text).join(' | ');
+      pass('Team mode: coder model runs the work and the reviewer model reviews it', /coder is pretend \/ coder-x/.test(infos) && /reviewer is pretend \/ reviewer-y/.test(infos), infos);
+      const txt = evsT.filter((e) => e.type === 'text').map((e) => e.delta).join('');
+      pass('Team mode: reviewer verdict is shown and CHANGES NEEDED sends the coder back for a fix pass', /Reviewer \(reviewer-y\)/.test(txt) && /CHANGES NEEDED/.test(txt) && rtT.messages.some((m) => m.role === 'user' && /reviewer checked your work/.test(String(m.content))), txt.slice(0, 160));
+      pass('Team mode: the main model selection is restored after the turn', rtT.model === 'pretend-1');
+      const evsA = []; const rtA = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'bypassPermissions', kind: 'code' }); rtA.team = true; rtA.coder = { provider: 'pretend', model: 'c' }; rtA.reviewer = { provider: 'pretend', model: 'r' };
+      rtA.mcp = await connectAll(stT.mcpServers, work, { userDir: userDir(), disabled: stT.builtinOff });
+      await agent.runTurn(rtA, { ...envT, emit: (e) => evsA.push(e) }, 'go PRETEND: ' + JSON.stringify([{ say: 'writing', tools: [{ name: 'Write', input: { file_path: wfile + '.2', content: 'hello2' } }] }, { say: 'done' }])); rtA.mcp.stop();
+      pass('Team mode: APPROVED ends the turn with no fix pass', evsA.some((e) => e.type === 'text' && /APPROVED/.test(e.delta)) && !rtA.messages.some((m) => m.role === 'user' && /reviewer checked your work/.test(String(m.content)))); }
+    { const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      const rtI = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'bypassPermissions', kind: 'code' }); const evI = [];
+      const envI = { userDir: userDir(), settings: config.loadSettings(userDir(), work), signal: new AbortController().signal, getCreds: () => ({}), connected: () => [], bases: () => ({}), ask: async () => ({ decision: 'deny' }), emit: (e) => evI.push(e) };
+      rtI.mcp = await connectAll(envI.settings.mcpServers, work, { userDir: userDir(), disabled: envI.settings.builtinOff });
+      await agent.runTurn(rtI, envI, 'what is in this picture?', ['data:image/png;base64,' + png]); rtI.mcp.stop();
+      const um = rtI.messages.find((m) => m.role === 'user');
+      pass('Images: the message carries the picture in the standard image_url format', Array.isArray(um.content) && um.content[0].type === 'text' && um.content[1].type === 'image_url' && um.content[1].image_url.url.startsWith('data:image/png;base64,'));
+      pass('Images: a picture counts about 1,500 tokens, not its base64 length', agent.estTokens([{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,' + 'A'.repeat(400000) } }] }]) < 3000); }
+    { const t1 = agent.fallbackTitle('Can you please help me fix the login bug in the settings page of my app'); const t2 = agent.fallbackTitle('   ');
+      pass('Auto-naming: fallback title is short and tidy', t1.length > 3 && t1.length <= 48 && !/^can you/i.test(t1) && t2 === 'New chat', t1); }
     const stub = path.join(work, 'mcp-stub.js');
     fs.writeFileSync(stub, `let b='';process.stdin.on('data',d=>{b+=d;let i;while((i=b.indexOf('\\n'))>=0){const l=b.slice(0,i);b=b.slice(i+1);if(!l.trim())continue;const m=JSON.parse(l);const r=(x)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:x})+'\\n');if(m.method==='initialize')r({protocolVersion:'2024-11-05',capabilities:{},serverInfo:{name:'stub',version:'1'}});else if(m.method==='tools/list')r({tools:[{name:'echo',description:'echo',inputSchema:{type:'object',properties:{t:{type:'string'}}}}]});else if(m.method==='tools/call')r({content:[{type:'text',text:'stub says '+m.params.arguments.t}]});}});`);
     process.env.ELECTRON_RUN_AS_NODE = '1';
@@ -247,6 +273,19 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     pass('engine: Chat mode rejects Bash', ct.evs.some((e) => e.type === 'tool_result' && /not available in Chat mode/.test(e.output)));
     const code = require('./engine/tools').toolDefs([], { kind: 'chat' }).map((d) => d.function.name);
     pass('Chat tool set has no file or shell tools', !['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'].some((n) => code.includes(n)), code.join(','));
+    // ---- UI: attach an image, send it, chat gets a name ----
+    await click('#seg-chat'); await sleep(300); await click('#btn-new'); await sleep(300); await ev(`window.setModel('pretend','pretend-1')`);
+    await ev(`(async()=>{const b=atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==');const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);await window.addImageFile(new File([a],'t.png',{type:'image/png'}));return 1})()`);
+    pass('Images: attaching shows a thumbnail above the message box', await ev(`document.querySelectorAll('#attach-strip .thumb').length===1 && !document.querySelector('#attach-strip').hidden`)); await shot('30-image-attached');
+    await ev(`window.submit('Can you please help me plan a birthday party for my sister')`);
+    await until(`document.querySelector('.msg.user img')`, 15000, 'image in sent message'); await until(`!window.S.busy`, 20000, 'idle');
+    pass('Images: the sent message shows the picture and the strip is cleared', await ev(`document.querySelectorAll('.msg.user img').length===1 && document.querySelector('#attach-strip').hidden`));
+    const ttl = await ev(`window.S.cur.title`); pass('Auto-naming: a new chat gets a short name from its first message', ttl !== 'New chat' && ttl.length <= 48 && /birthday/i.test(ttl), ttl);
+    pass('Auto-naming: the sidebar shows the name', await ev(`Array.from(document.querySelectorAll('.srow')).some(r=>/birthday/i.test(r.textContent))`)); await shot('31-auto-named');
+    await click('#seg-code'); await sleep(300);
+    await ev(`window.lazy('modals').then(()=>window.Modals.team())`); await until(`document.querySelector('.modal') && document.querySelector('.modal').innerText.includes('Team mode')`, 8000, 'team dialog');
+    await ev(`document.querySelector('.modal input[type=checkbox]').click()`); await sleep(200);
+    pass('Team dialog asks for a coder and a reviewer model', await ev(`(()=>{const t=document.querySelector('.modal').innerText;return t.includes('Coder')&&t.includes('Reviewer')})()`)); await shot('32-team-dialog'); await ev(`document.querySelector('#modal-host').innerHTML=''`);
   } catch (e) { errors.push('self-check aborted: ' + (e && e.stack || e)); }
 
   const metrics = app.getAppMetrics(); const mem = { rss_main_mb: Math.round(process.memoryUsage().rss / 1048576), total_working_set_mb: Math.round(metrics.reduce((a, m) => a + (m.memory.workingSetSize || 0), 0) / 1024), processes: metrics.map((m) => ({ type: m.type, mb: Math.round((m.memory.workingSetSize || 0) / 1024) })) };

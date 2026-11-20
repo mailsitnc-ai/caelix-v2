@@ -9,7 +9,17 @@ const { decide, summarize, ruleFor, SAFE_BASH } = require('./permissions');
 const config = require('./config');
 const { globalMemoryText } = require('./builtin');
 
-const estTokens = (msgs) => Math.ceil(JSON.stringify(msgs).length / 4);
+// images count as about 1,500 tokens each instead of their (huge) base64 text
+const IMG_PAD = 'x'.repeat(6000);
+const strip = (k, v) => (k === 'url' && typeof v === 'string' && v.startsWith('data:') ? IMG_PAD : v);
+const estTokens = (msgs) => Math.ceil(JSON.stringify(msgs, strip).length / 4);
+const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => (p.type === 'text' ? p.text : '[image]')).join(' ') : c == null ? '' : JSON.stringify(c));
+// only the two most recent image-carrying messages keep their pictures; older ones become a short note
+function prepareMessages(msgs) {
+  const idx = []; msgs.forEach((m, i) => { if (Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url')) idx.push(i); });
+  const keep = new Set(idx.slice(-2)); if (keep.size === idx.length) return msgs;
+  return msgs.map((m, i) => (idx.includes(i) && !keep.has(i) ? { ...m, content: m.content.map((p) => (p.type === 'image_url' ? { type: 'text', text: '[earlier image omitted]' } : p)) } : m));
+}
 
 function buildSystem(rt, env) {
   const chat = rt.kind === 'chat';
@@ -35,6 +45,7 @@ function buildSystem(rt, env) {
 }
 
 async function callModel(rt, env, messages, tools, onText, onThinking) {
+  messages = prepareMessages(messages);
   const args = { messages, tools, signal: env.signal, onText, onThinking, effort: rt.effort };
   if (rt.provider === 'pretend') return streamPretend({ messages, onText, signal: env.signal });
   if (rt.provider === 'omniroute') {
@@ -65,7 +76,7 @@ async function callModel(rt, env, messages, tools, onText, onThinking) {
 }
 
 async function summarise(rt, env, msgs) {
-  const transcript = msgs.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content || m.tool_calls || '')}`).join('\n').slice(0, 120000);
+  const transcript = msgs.map((m) => `${m.role}: ${m.content ? textOf(m.content) : JSON.stringify(m.tool_calls || '')}`).join('\n').slice(0, 120000);
   let summary = '';
   try { const r = await callModel(rt, env, [{ role: 'system', content: 'Summarise the conversation so far for an assistant that will continue the work. Keep decisions, facts about the user, file paths, open tasks and errors. Be concise but complete.' }, { role: 'user', content: transcript }], null); summary = r.text.trim(); } catch (_) {}
   return summary || 'Earlier conversation (' + msgs.length + ' messages) was trimmed to save space.';
@@ -87,7 +98,7 @@ async function resetContext(rt, env, why) {
 }
 function breakdown(messages) {
   let sys = 0, msg = 0, tool = 0;
-  for (const m of messages) { const n = Math.ceil(JSON.stringify(m).length / 4); if (m.role === 'system') sys += n; else if (m.role === 'tool') tool += n; else msg += n; }
+  for (const m of messages) { const n = Math.ceil(JSON.stringify(m, strip).length / 4); if (m.role === 'system') sys += n; else if (m.role === 'tool') tool += n; else msg += n; }
   return { system: sys, messages: msg, tools: tool, total: sys + msg + tool, active: messages.length - (messages[0] && messages[0].role === 'system' ? 1 : 0) };
 }
 
@@ -152,7 +163,7 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
   return final;
 }
 
-async function runTurn(rt, env, userText) {
+async function runTurn(rt, env, userText, images) {
   const st = rt.st;
   Object.assign(st, {
     emit: env.emit, ask: env.ask, signal: env.signal, docsDir: env.docsDir, renderDocument: env.renderDocument, setMode: (m) => { st.mode = m; env.emit({ type: 'mode', mode: m }); },
@@ -173,16 +184,70 @@ async function runTurn(rt, env, userText) {
   if (ups.blocked) { env.emit({ type: 'error', message: 'Prompt blocked by hook: ' + ups.reason }); return; }
   if (!rt.messages.length) rt.messages.push({ role: 'system', content: buildSystem(rt, env) }); else rt.messages[0] = { role: 'system', content: buildSystem(rt, env) };
   rt.checkpoints.push({ turn: rt.turn, msgIndex: rt.messages.length, prompt: userText.slice(0, 80), snap: rt.turnSnap });
-  rt.messages.push({ role: 'user', content: userText + ((ups.outputs || []).length ? '\n\n' + ups.outputs.join('\n') : '') });
+  const fullText = userText + ((ups.outputs || []).length ? '\n\n' + ups.outputs.join('\n') : '');
+  rt.messages.push({ role: 'user', content: images && images.length ? [{ type: 'text', text: fullText || 'Look at the attached image.' }, ...images.map((u) => ({ type: 'image_url', image_url: { url: u } }))] : fullText });
   env.emit({ type: 'turn_start', turn: rt.turn });
+  const mainSel = { provider: rt.provider, model: rt.model };
+  const teamOn = rt.kind === 'code' && rt.team && rt.coder && rt.coder.model;
+  if (teamOn) { rt.provider = rt.coder.provider; rt.model = rt.coder.model; env.emit({ type: 'info', text: `Team: coder is ${rt.coder.provider} / ${rt.coder.model}` }); }
   try {
-    await loop(rt, env, { messages: rt.messages, tools: toolDefs(rt.mcp && rt.mcp.defs, { kind: rt.kind }), depth: 0 });
+    const tools = toolDefs(rt.mcp && rt.mcp.defs, { kind: rt.kind });
+    const reply = await loop(rt, env, { messages: rt.messages, tools, depth: 0 });
+    if (rt.kind === 'code' && rt.team && rt.reviewer && rt.reviewer.model && rt.turnSnap.size) {
+      const verdict = await reviewPass(rt, env, userText, reply);
+      if (verdict && verdict.changes && !env.signal.aborted) {
+        rt.messages.push({ role: 'user', content: 'A separate reviewer checked your work and asked for these changes. Make them now, then finish with a short note:\n\n' + verdict.text });
+        await loop(rt, env, { messages: rt.messages, tools, depth: 0 });
+      }
+    }
     env.emit({ type: 'turn_end', ok: true });
   } catch (e) {
     if (e.name === 'AbortError') env.emit({ type: 'turn_end', ok: false, aborted: true });
     else { env.emit({ type: 'error', message: String(e.message || e) }); env.emit({ type: 'turn_end', ok: false }); }
-  }
+  } finally { if (teamOn) { rt.provider = mainSel.provider; rt.model = mainSel.model; } }
   config.runHooks(env.settings, 'Stop', {}, st.cwd);
+}
+
+// Team mode: a second model reviews what the coder changed. Returns { text, changes }.
+async function reviewPass(rt, env, userText, coderReply) {
+  const files = []; let budget = 24000;
+  for (const [f, before] of rt.turnSnap) {
+    let now = null; try { now = fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null; } catch (_) {}
+    const body = now === null ? '(deleted)' : now.slice(0, Math.min(6000, budget)); budget -= body.length;
+    files.push(`### ${f} (${before === null ? 'new file' : now === null ? 'deleted' : 'modified'})\n${body}${now && now.length > body.length ? '\n…(truncated)' : ''}`);
+    if (budget <= 0) break;
+  }
+  const sys = 'You are a strict, fair code reviewer. You are given a request, the coder\'s final message and the files the coder changed. Look for bugs, missed requirements, broken edge cases and security problems. Start your reply with exactly APPROVED or CHANGES NEEDED on the first line. If changes are needed, list them as short numbered points with the file and what to fix. Keep it brief.';
+  const user = `REQUEST:\n${userText}\n\nCODER'S FINAL MESSAGE:\n${(coderReply || '').slice(0, 3000)}\n\nCHANGED FILES:\n${files.join('\n\n')}`;
+  const r = { ...rt, provider: rt.reviewer.provider, model: rt.reviewer.model };
+  const id = 'rv' + Date.now().toString(36); let text = ''; let started = false;
+  env.emit({ type: 'info', text: `Team: reviewer is ${r.provider} / ${r.model}` });
+  try {
+    const out = await callModel(r, env, [{ role: 'system', content: sys }, { role: 'user', content: user }], [], (t) => {
+      if (!started) { started = true; env.emit({ type: 'text_start', id }); env.emit({ type: 'text', id, delta: `**Reviewer (${r.model})**\n\n` }); }
+      text += t; env.emit({ type: 'text', id, delta: t });
+    }, () => {});
+    if (!started) { env.emit({ type: 'text_start', id }); env.emit({ type: 'text', id, delta: `**Reviewer (${r.model})**\n\n${out.text || ''}` }); text = out.text || ''; }
+    env.emit({ type: 'text_end', id });
+  } catch (e) { if (e.name === 'AbortError') throw e; env.emit({ type: 'error', message: 'Reviewer failed: ' + String(e.message).slice(0, 200) }); return null; }
+  return { text, changes: /^\s*CHANGES NEEDED/i.test(text) };
+}
+
+// short chat title from the first exchange (used when the user has not named the chat)
+const cleanTitle = (s) => String(s || '').replace(/^["'`*#\s]+|["'`*.\s]+$/g, '').replace(/^title\s*:\s*/i, '').replace(/\s+/g, ' ').slice(0, 48);
+function fallbackTitle(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').replace(/^(please|can you|could you|help me|i want to|i need to)\s+/i, '').trim(); if (!t) return 'New chat';
+  const w = t.split(' ').slice(0, 7).join(' '); return cleanTitle(w.charAt(0).toUpperCase() + w.slice(1));
+}
+async function makeTitle(rt, env, userText, reply) {
+  if (rt.provider === 'pretend') return fallbackTitle(userText);
+  try {
+    const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 20000);
+    const out = await callModel({ ...rt, effort: undefined }, { ...env, signal: ctl.signal, emit: () => {} }, [
+      { role: 'system', content: 'You name chats. Reply with only a title of 2 to 5 words that describes the conversation. No quotes, no punctuation at the end, no explanation.' },
+      { role: 'user', content: `First message:\n${String(userText).slice(0, 600)}\n\nStart of the reply:\n${String(reply || '').slice(0, 500)}` }], [], () => {}, () => {});
+    clearTimeout(to); const t = cleanTitle(out.text); return t.length >= 3 ? t : fallbackTitle(userText);
+  } catch (_) { return fallbackTitle(userText); }
 }
 
 // restore files (and optionally conversation) to before the given turn
@@ -198,4 +263,4 @@ function rewind(rt, turn, { code, conversation }) {
   return { ok: true, restored: Array.from(new Set(restored)) };
 }
 
-module.exports = { runTurn, compact, resetContext, breakdown, rewind, buildSystem, estTokens };
+module.exports = { makeTitle, fallbackTitle, textOf, runTurn, compact, resetContext, breakdown, rewind, buildSystem, estTokens };

@@ -154,3 +154,12 @@ code { font-family: var(--mono); font-size: 12.8px; background: var(--glass3); p
 .sidechat { position: absolute; right: 22px; bottom: 150px; width: 390px; max-height: 50%; border-radius: 18px; display: flex; flex-direction: column; z-index: 40; background: rgba(9, 16, 34, .88); } .sidechat .sh { padding: 10px 14px; display: flex; font-weight: 500; border-bottom: 1px solid var(--border); } .sidechat .sb { padding: 11px 14px; overflow: auto; flex: 1; font-size: 13.8px; } .sidechat input { border: 0; border-top: 1px solid var(--border); padding: 10px 14px; outline: 0; background: transparent; border-radius: 0 0 18px 18px; }
 .thinking-only { display: none; } body.view-thinking .thinking-only, body.view-verbose .thinking-only { display: block; }
 ::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-thumb { background: rgba(130, 175, 255, .2); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; } ::-webkit-scrollbar-track { background: transparent; }
+
+/* image attachments */
+#attach-strip { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 2px 4px; } #attach-strip[hidden] { display: none; }
+.thumb { position: relative; width: 64px; height: 64px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border2); background: var(--glass3); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb button { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; line-height: 20px; padding: 0; cursor: pointer; }
+.msg.user .uimgs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; } .msg.user .uimgs img { max-width: 220px; max-height: 160px; border-radius: 12px; border: 1px solid var(--border2); display: block; cursor: zoom-in; }
+#composer.dragover { outline: 2px dashed var(--accent2); outline-offset: 2px; }
+.teamrow { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); } .teamrow:last-child { border-bottom: 0; } .teamrow .tl { width: 110px; font-weight: 600; } .teamrow .tm { flex: 1; color: var(--muted, #9db0cc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

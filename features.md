@@ -63,3 +63,5 @@ Electron with plain HTML, CSS and JavaScript. No React, no build tools, no packa
 - **Commands:** /reset /compact /compat /btw /clear /new /chat /code /model /mode /plan /team /agents /rename /rewind /diff /terminal /browser /files /context /cost /memory /remember /init /export /copy /skills /hooks /mcp /keys /settings /system /docs /fork /theme /view /help.
 - **MCP manager** (stdio and HTTP, project and user scopes, import, quick-add, reconnect) with built-in `desktop` and `memory` servers. **Hooks manager** (events, matcher, scope, presets).
 - **Logo:** the supplied minimal dark squircle with a glowing star (`assets/source/caelix-icon-minimal-original.webp`), used for the window, Dock, app bundle, installer shortcut and every in-app logo.
+
+- Image attachments (paste, drag, or + menu; up to 6 per message, shrunk to 1568 px); Team mode with a coder model and a reviewer model; chats name themselves after the first reply; Z.ai GLM provider (free glm-4.7-flash, glm-4.6v-flash).

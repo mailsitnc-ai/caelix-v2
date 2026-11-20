@@ -41,9 +41,9 @@
   }
 
   // ---------- Model picker ----------
-  async function modelPicker(anchor) {
+  async function modelPicker(anchor, onPick) {
     window.closePop && window.closePop(); host().innerHTML = ''; document.querySelectorAll('.mpicker').forEach((n) => n.remove());
-    const pop = el('div', 'popup mpicker'); pop.style.position = 'fixed'; const top = el('div', 'mtop'); const inp = el('input'); inp.placeholder = 'Search models'; const refresh = el('button', null, 'Refresh'); top.append(inp, refresh); const list = el('div', 'mlist'); pop.append(top, list); document.body.appendChild(pop);
+    const pop = el('div', 'popup mpicker'); pop.style.position = 'fixed'; if (onPick) pop.style.zIndex = '500'; const top = el('div', 'mtop'); const inp = el('input'); inp.placeholder = 'Search models'; const refresh = el('button', null, 'Refresh'); top.append(inp, refresh); const list = el('div', 'mlist'); pop.append(top, list); document.body.appendChild(pop);
     const a = (anchor || $('#chip-model')).getBoundingClientRect(); const wide = Math.min(580, innerWidth - 20); pop.style.width = wide + 'px'; pop.style.left = Math.max(10, Math.min(a.left, innerWidth - wide - 10)) + 'px';
     if (a.top > innerHeight / 2) pop.style.bottom = (innerHeight - a.top + 8) + 'px'; else pop.style.top = a.bottom + 8 + 'px';
     const cur = S.cur ? { provider: S.cur.provider, model: S.cur.model } : { provider: S.draft.provider, model: S.draft.model }; let groups = []; let favs = new Set(S.fav || []);
@@ -53,7 +53,7 @@
     function item(g, m) {
       const key = g.id + '|' + m.id; const r = el('div', 'mi' + (cur.provider === g.id && cur.model === m.id ? ' cur' : ''));
       r.innerHTML = `<span class="dot" style="background:${DOT[g.id] || '#4d9bff'}"></span><div><span class="mn">${esc(m.id)}</span>${(m.free ? '<span class="md"> Free</span>' : '') + (m.desc ? `<span class="md"> · ${esc(m.desc)}</span>` : '')}</div><button class="star ${favs.has(key) ? 'on' : ''}" title="Favorite">★</button>`;
-      r.onclick = (e) => { if (e.target.closest('.star')) { e.stopPropagation(); api.toggleFav(key).then((f) => { favs = new Set(f); S.fav = f; draw(); }); return; } window.setModel(g.id, m.id); close(); }; return r;
+      r.onclick = (e) => { if (e.target.closest('.star')) { e.stopPropagation(); api.toggleFav(key).then((f) => { favs = new Set(f); S.fav = f; draw(); }); return; } (onPick || window.setModel)(g.id, m.id); close(); }; return r;
     }
     let arch = {}; let showArch = false; api.archive().then((a) => { arch = a || {}; draw(); }).catch(() => {});
     const isArch = (pid, id) => !!arch[pid + '/' + id];
@@ -200,5 +200,23 @@
     const b = el('div'); b.innerHTML = rows.map(([k, d]) => `<div class="pi"><span class="kbd">${k}</span><span class="d">${d}</span></div>`).join(''); dialog('Keyboard shortcuts', 'Type / in the composer for every command.', b, []);
   }
 
-  window.Modals = { keys, modelPicker, mcp, hooks, memory, system, permission, rewind, side, sideAppend, settings, help };
+  function team() {
+    const cur = S.cur || S.draft; let on = !!cur.team; let coder = cur.coder || { provider: cur.provider, model: cur.model }; let reviewer = cur.reviewer || null;
+    const body = el('div'); const save = async () => {
+      if (on && !reviewer) { toast('Choose a reviewer model first'); return false; }
+      const patch = { team: on, coder: on ? coder : null, reviewer: on ? reviewer : null };
+      if (S.cur) { await api.setSession(S.cur.id, patch); Object.assign(S.cur, patch); } else Object.assign(S.draft, patch);
+      window.updateChips(); toast(on ? `Team on: ${coder.model} codes, ${reviewer.model} reviews` : 'Team mode off'); return true;
+    };
+    function draw() {
+      body.innerHTML = ''; const intro = el('div', 'info', 'Team mode uses two models. The coder does the work and edits files. After it finishes, the reviewer reads the changes and either approves them or sends the coder back to fix problems.'); body.appendChild(intro);
+      const r0 = el('div', 'teamrow'); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = on; cb.onchange = () => { on = cb.checked; draw(); }; r0.append(cb, el('div', 'tl', 'Team mode'), el('div', 'tm', on ? 'On' : 'Off')); body.appendChild(r0);
+      if (on) for (const [lab, get, set] of [['Coder', () => coder, (v) => (coder = v)], ['Reviewer', () => reviewer, (v) => (reviewer = v)]]) {
+        const r = el('div', 'teamrow'); const v = get(); const b = btn(v ? 'Change' : 'Choose model', '', (ev) => modelPicker(ev.currentTarget, (provider, model) => { set({ provider, model }); draw(); }));
+        r.append(el('div', 'tl', lab), el('div', 'tm', v ? `${v.provider} / ${v.model}` : 'Not chosen yet'), b); body.appendChild(r);
+      }
+    }
+    draw(); dialog('Team mode', 'Pick one model to write code and a different one to review it.', body, [btn('Cancel', '', () => (host().innerHTML = '')), btn('Save', 'pri', async () => { if (await save()) host().innerHTML = ''; })], { width: '620px' });
+  }
+  window.Modals = { team, keys, modelPicker, mcp, hooks, memory, system, permission, rewind, side, sideAppend, settings, help };
 })();

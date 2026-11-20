@@ -8,7 +8,7 @@
   const EFFORTS = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High']];
   const VIEWS = [['normal', 'Normal'], ['thinking', 'Thinking'], ['verbose', 'Verbose']];
   const SLASH = [['/reset', 'Summarise everything, keep memory, reset the token count'], ['/compact', 'Summarise older messages, keep the recent ones'], ['/compat', 'Same as /compact'], ['/btw', 'Ask a side question: /btw <question>'], ['/clear', 'Clear this conversation'], ['/new', 'Start a new chat or session'], ['/chat', 'Switch to Chat'], ['/code', 'Switch to Code'], ['/model', 'Choose model'], ['/mode', 'Change permission mode'], ['/plan', 'Switch to plan mode'], ['/team', 'Toggle team mode'], ['/agents', 'Pick a sub-agent'], ['/rename', 'Rename: /rename <title>'], ['/rewind', 'Undo changes from a past prompt'], ['/diff', 'Show changes'], ['/terminal', 'Open terminal'], ['/browser', 'Open browser'], ['/files', 'Open files'], ['/context', 'Show context use'], ['/cost', 'Show token usage'], ['/memory', 'Show project memory'], ['/remember', 'Save a note: /remember <text>'], ['/init', 'Create CAELIX.md for this project'], ['/export', 'Export as Markdown'], ['/copy', 'Copy the last reply'], ['/skills', 'List skills'], ['/hooks', 'Manage lifecycle hooks'], ['/mcp', 'Manage MCP servers'], ['/keys', 'Provider keys'], ['/settings', 'Settings'], ['/system', 'Inspect the system prompt'], ['/docs', 'Open the Chat documents folder'], ['/fork', 'Fork this session'], ['/theme', 'Toggle light / dark'], ['/view', 'Cycle transcript view'], ['/help', 'Keyboard shortcuts']];
-  const DOT = { gemini: '#4d9bff', openrouter: '#9b7bff', nvidia: '#76d160', groq: '#ff9a3d', coarena: '#9aa7bd', kilo: '#ffd23f', zen: '#38d2c0', numes: '#ff7ab8', abliteration: '#ff6b7a', omniroute: '#86c9ff', pretend: '#9aa7bd' };
+  const DOT = { gemini: '#4d9bff', openrouter: '#9b7bff', nvidia: '#76d160', zai: '#5b8cff', groq: '#ff9a3d', coarena: '#9aa7bd', kilo: '#ffd23f', zen: '#38d2c0', numes: '#ff7ab8', abliteration: '#ff6b7a', omniroute: '#86c9ff', pretend: '#9aa7bd' };
   const S = { kind: 'chat', sessions: [], cur: null, items: [], providers: [], models: {}, fav: [], view: 'normal', pane: null, queue: [], busy: false, todos: [], ctx: 0, ctxLimit: 2000000, bd: { system: 0, messages: 0, tools: 0, active: 0 }, usage: { in: 0, out: 0 }, draft: { cwd: '', provider: 'omniroute', model: 'auto', mode: 'default', effort: 'medium', team: false }, curText: null, curBuf: '', workT: 0, bg: [], changes: [], checkpoints: [], archivedShown: false, filter: '', toolMap: {} };
   window.S = S; window.$ = $; window.el = el; window.esc = esc; window.api = api; window.DOT = DOT;
 
@@ -126,7 +126,33 @@
   function stick() { const c = scroller(); if (S.follow !== false) c.scrollTop = c.scrollHeight; }
   scroller().addEventListener('scroll', () => { const c = scroller(); S.follow = c.scrollHeight - c.scrollTop - c.clientHeight < 90; });
   const tr = () => $('#transcript');
-  function addUser(text) { const d = el('div', 'msg user'); d.textContent = text; tr().appendChild(d); }
+  function addUser(text, images) {
+    const d = el('div', 'msg user');
+    if (images && images.length) { const g = el('div', 'uimgs'); images.forEach((u) => { const i = document.createElement('img'); i.src = u; i.alt = 'attached image'; g.appendChild(i); }); d.appendChild(g); }
+    if (text) d.appendChild(document.createTextNode(text)); tr().appendChild(d);
+  }
+  // ---- image attachments: read, shrink to at most 1568 px, keep as data URLs until sent ----
+  S.attach = [];
+  const VISION_RE = /vl\b|-vl|vision|vila|gemini|gpt-4|gpt-5|gpt-6|claude|opus|sonnet|haiku|fable|\d+v\b|glm-4\.\dv|pixtral|llava|omni|gemma-[34]|qwen.*vl|cosmos|paligemma|mimo|llama-4|kimi|maverick|scout/i;
+  function renderAttach() {
+    const s = $('#attach-strip'); s.innerHTML = ''; s.hidden = !S.attach.length;
+    S.attach.forEach((u, i) => { const t = el('div', 'thumb'); const im = document.createElement('img'); im.src = u; const x = el('button', null, '✕'); x.title = 'Remove'; x.onclick = () => { S.attach.splice(i, 1); renderAttach(); }; t.append(im, x); s.appendChild(t); });
+  }
+  async function addImageFile(file) {
+    if (!file || !/^image\/(png|jpe?g|webp|gif)$/.test(file.type)) { toast('Only PNG, JPEG, WebP or GIF images can be attached'); return; }
+    if (S.attach.length >= 6) { toast('You can attach up to 6 images per message'); return; }
+    const url = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+    const out = await new Promise((res) => {
+      const im = new Image(); im.onload = () => {
+        const k = Math.min(1, 1568 / Math.max(im.width, im.height)); if (k === 1 && file.size < 900 * 1024) return res(url);
+        const c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', 0.86));
+      }; im.onerror = () => res(null); im.src = url;
+    });
+    if (!out) { toast('Could not read that image'); return; }
+    S.attach.push(out); renderAttach();
+    const m = S.cur ? S.cur.model : S.draft.model; if (m && !VISION_RE.test(m)) toast(`${m} may not read images. Pick a vision model (for example one with "vl" or "omni" in its name) if it fails.`, 6000);
+  }
+  window.addImageFile = addImageFile;
   function asstShell(raw) {
     const d = el('div', 'msg assistant'); d.innerHTML = '<div class="mh"><span class="star">✦</span><span>CAELIX</span><button class="copy">Copy</button></div><div class="body"></div>'; d._raw = raw || '';
     d.querySelector('.copy').onclick = (e) => { navigator.clipboard.writeText(d._raw).then(() => { e.target.textContent = 'Copied'; setTimeout(() => (e.target.textContent = 'Copy'), 1200); }).catch(() => {}); };
@@ -174,7 +200,7 @@
   function renderTranscript() {
     tr().innerHTML = ''; S.curText = null; S.toolMap = {};
     for (const it of S.items) {
-      if (it.type === 'user') addUser(it.text);
+      if (it.type === 'user') addUser(it.text, it.images);
       else if (it.type === 'assistant') { const d = asstShell(it.text); d.querySelector('.body').innerHTML = md.render(it.text); tr().appendChild(d); }
       else if (it.type === 'tool') addTool(it);
       else if (it.type === 'summary') addSummary(it);
@@ -234,17 +260,18 @@
     if (S.cur) return true;
     if (isCode() && !S.draft.cwd) { toast('Open a project folder first'); return false; }
     const r = await api.newSession({ kind: S.kind, cwd: isCode() ? S.draft.cwd : '', provider: S.draft.provider, model: S.draft.model, mode: S.draft.mode });
-    S.cur = r.meta; await api.setSession(r.meta.id, { effort: S.draft.effort, team: S.draft.team }); S.cur.effort = S.draft.effort; S.cur.team = S.draft.team; S.items = []; $('#chatcol').classList.remove('empty'); tr().innerHTML = ''; await refreshSessions(); return true;
+    S.cur = r.meta; await api.setSession(r.meta.id, { effort: S.draft.effort, team: S.draft.team, coder: S.draft.coder || null, reviewer: S.draft.reviewer || null }); S.cur.coder = S.draft.coder || null; S.cur.reviewer = S.draft.reviewer || null; S.cur.effort = S.draft.effort; S.cur.team = S.draft.team; S.items = []; $('#chatcol').classList.remove('empty'); tr().innerHTML = ''; await refreshSessions(); return true;
   }
   async function submit(text, fromQueue) {
-    text = text.trim(); if (!text) return;
+    text = text.trim(); if (!text && !S.attach.length) return;
     if (!fromQueue && text.startsWith('/')) { const handled = await runSlash(text); if (handled) return; }
+    if (S.busy && !fromQueue && S.attach.length) { toast('Wait for the current reply to finish before sending images'); return; }
     if (S.busy && !fromQueue) { S.queue.push(text); renderQueue(); $('#input').value = ''; autosize(); return; }
     if (keyProblem()) { toast(keyProblem(), 3500); return; }
     if (!(await ensureSession())) return;
-    $('#input').value = ''; autosize(); hidePops(); S.items.push({ type: 'user', text }); addUser(text); S.follow = true; setBusy(true); stick();
-    if (S.cur.title === 'New chat' || S.cur.title === 'New session') { S.cur.title = text.replace(/\s+/g, ' ').slice(0, 56); setTitle(); }
-    try { await api.send(S.cur.id, text); } catch (e) { addNotice('err', e.message); setBusy(false); }
+    $('#input').value = ''; autosize(); hidePops(); const imgs = S.attach.slice(); S.attach = []; renderAttach(); S.items.push({ type: 'user', text, ...(imgs.length ? { images: imgs } : {}) }); addUser(text, imgs); S.follow = true; setBusy(true); stick();
+    if (S.cur.title === 'New chat' || S.cur.title === 'New session') { S.cur.title = (text || 'Image').replace(/\s+/g, ' ').slice(0, 40); setTitle(); }
+    try { await api.send(S.cur.id, text, imgs); } catch (e) { addNotice('err', e.message); setBusy(false); }
   }
   window.submit = submit;
   function autosize() { const t = $('#input'); t.style.height = 'auto'; t.style.height = Math.min(240, t.scrollHeight) + 'px'; }
@@ -270,9 +297,15 @@
     if (e.key === 'Escape') { hidePops(); if (S.busy) stop(); }
   });
   function stop() { if (S.cur && S.busy) api.stop(S.cur.id); }
+  $('#input').addEventListener('paste', (e) => { const fs = Array.from(e.clipboardData && e.clipboardData.files || []).filter((f) => f.type.startsWith('image/')); if (fs.length) { e.preventDefault(); fs.forEach(addImageFile); } });
+  const comp = $('#composer'); ['dragenter', 'dragover'].forEach((n) => comp.addEventListener(n, (e) => { if (Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); comp.classList.add('dragover'); } }));
+  ['dragleave', 'drop'].forEach((n) => comp.addEventListener(n, () => comp.classList.remove('dragover')));
+  comp.addEventListener('drop', (e) => { const fs = Array.from(e.dataTransfer.files || []).filter((f) => f.type.startsWith('image/')); if (fs.length) { e.preventDefault(); fs.forEach(addImageFile); } });
+  function pickImages() { const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/png,image/jpeg,image/webp,image/gif'; i.multiple = true; i.onchange = () => Array.from(i.files).forEach(addImageFile); i.click(); }
+  api.onTitle && api.onTitle(({ sid, title }) => { if (S.cur && S.cur.id === sid) { S.cur.title = title; setTitle(); } });
   $('#btn-stop').onclick = stop; $('#btn-send').onclick = () => submit($('#input').value);
   $('#btn-cmds').onclick = () => { const i = $('#input'); i.focus(); i.value = '/'; i.dispatchEvent(new Event('input')); };
-  $('#btn-plus').onclick = (e) => popMenu(e.currentTarget, [['Attach files…', async () => { const fs = await api.pickFiles(); if (fs.length) { $('#input').value += fs.map((f) => '@' + f).join(' ') + ' '; autosize(); $('#input').focus(); } }], ['Skills…', async () => { const k = isCode() && curCwd() ? await api.skills(curCwd()) : []; popMenu($('#btn-plus'), k.length ? k.map((n) => ['/' + n, () => { $('#input').value = 'Use the skill ' + n + ': '; $('#input').focus(); }]) : [['No skills in .caelix/skills yet', () => {}]], { up: true }); }], ['MCP servers…', () => window.lazy('modals').then(() => window.Modals.mcp())]], { up: true });
+  $('#btn-plus').onclick = (e) => popMenu(e.currentTarget, [['Attach image…', pickImages], ['Attach files…', async () => { const fs = await api.pickFiles(); if (fs.length) { $('#input').value += fs.map((f) => '@' + f).join(' ') + ' '; autosize(); $('#input').focus(); } }], ['Skills…', async () => { const k = isCode() && curCwd() ? await api.skills(curCwd()) : []; popMenu($('#btn-plus'), k.length ? k.map((n) => ['/' + n, () => { $('#input').value = 'Use the skill ' + n + ': '; $('#input').focus(); }]) : [['No skills in .caelix/skills yet', () => {}]], { up: true }); }], ['MCP servers…', () => window.lazy('modals').then(() => window.Modals.mcp())]], { up: true });
   $('#btn-agents').onclick = async (e) => { const a = await api.agents(curCwd() || ''); popMenu(e.currentTarget, a.map((x) => [x.name, () => { $('#input').value = `Use the ${x.name} agent to `; $('#input').focus(); autosize(); }, { desc: x.desc }]), { up: true }); };
   $('#keyban-open').onclick = () => window.lazy('modals').then(() => window.Modals.keys());
 
@@ -283,7 +316,8 @@
   function modeMenu(anchor) { if (!isCode()) return; popMenu(anchor || $('#chip-mode'), MODES.map(([id, label, desc]) => [label, () => setMode(id), { desc, cur: curMode() === id }])); }
   async function setMode(id) { if (S.cur) { await api.setSession(S.cur.id, { mode: id }); S.cur.mode = id; } else S.draft.mode = id; api.setLast({ mode: id }); updateChips(); }
   $('#chip-mode').onclick = (e) => modeMenu(e.currentTarget); $('#chip-mode-top').onclick = (e) => modeMenu(e.currentTarget);
-  $('#chip-team').onclick = async () => { const v = !curTeam(); if (S.cur) { await api.setSession(S.cur.id, { team: v }); S.cur.team = v; } else S.draft.team = v; updateChips(); toast(v ? 'Team mode on: work is split across sub-agents' : 'Team mode off'); };
+  $('#chip-team').onclick = () => window.lazy('modals').then(() => window.Modals.team());
+  const _oldTeam = async () => { const v = !curTeam(); if (S.cur) { await api.setSession(S.cur.id, { team: v }); S.cur.team = v; } else S.draft.team = v; updateChips(); toast(v ? 'Team mode on: work is split across sub-agents' : 'Team mode off'); };
   function effortMenu(anchor) { popMenu(anchor || $('#chip-model'), EFFORTS.map(([id, l]) => [l, async () => { if (S.cur) { await api.setSession(S.cur.id, { effort: id }); S.cur.effort = id; } else S.draft.effort = id; toast('Effort: ' + l); }, { cur: eff() === id }])); }
   $('#chip-model').onclick = () => window.lazy('modals').then(() => window.Modals.modelPicker($('#chip-model'))); $('#chip-model-top').onclick = () => window.lazy('modals').then(() => window.Modals.modelPicker($('#chip-model-top')));
   window.setModel = async (provider, model) => { if (S.cur) { await api.setSession(S.cur.id, { provider, model }); S.cur.provider = provider; S.cur.model = model; } else { S.draft.provider = provider; S.draft.model = model; } api.setLast({ provider, model }); updateChips(); };

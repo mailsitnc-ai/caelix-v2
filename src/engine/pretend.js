@@ -7,7 +7,13 @@ function lastUserIndex(messages) { for (let i = messages.length - 1; i >= 0; i--
 
 async function streamPretend({ messages, onText, signal }) {
   const ui = lastUserIndex(messages); const u = messages[ui];
-  const text = typeof u.content === 'string' ? u.content : '';
+  const text = typeof u.content === 'string' ? u.content : Array.isArray(u.content) ? u.content.filter((p) => p.type === 'text').map((p) => p.text).join(' ') : '';
+  const sys0 = messages[0] && typeof messages[0].content === 'string' ? messages[0].content : '';
+  if (/strict, fair code reviewer/.test(sys0)) { // reviewer role in Team mode: verdict comes from "PRETEND_REVIEW: <text>" in the request
+    const rv = /PRETEND_REVIEW:\s*([A-Z ]+)/.exec(text); const say = rv ? rv[1].trim() + '\n1. Please rename the variable.' : 'APPROVED\nLooks fine.'; let out = '';
+    for (const w of say.split(/(\s+)/)) { out += w; onText && onText(w); await sleep(4); }
+    return { text: out, toolCalls: [], finish: 'stop', usage: { in: 10, out: 10 } };
+  }
   const m = /PRETEND:\s*(\[[\s\S]*\])/.exec(text);
   const stepNo = messages.slice(ui + 1).filter((x) => x.role === 'assistant').length;
   let step;
