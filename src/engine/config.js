@@ -5,6 +5,9 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// readList: always an array, even if the file holds an object such as {hooks:[...]} or something unexpected.
+function asList(v, key) { if (Array.isArray(v)) return v; if (v && typeof v === 'object' && Array.isArray(v[key])) return v[key]; return []; }
+function readList(f, key) { return asList(readJson(f, []), key); }
 function readJson(f, d) { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (_) { return d === undefined ? {} : d; } }
 function writeJson(f, o) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(o, null, 2)); }
 
@@ -34,7 +37,7 @@ function addMcp(userDir, cwd, { name, scope, command }) {
 }
 function removeMcp(userDir, cwd, name, scope) { const f = mcpFiles(userDir, cwd)[scope]; if (!f) return false; const j = readJson(f); if (j.mcpServers) delete j.mcpServers[name]; writeJson(f, j); return true; }
 function toggleMcp(userDir, cwd, name, scope, disabled) { const f = mcpFiles(userDir, cwd)[scope]; if (!f) return false; const j = readJson(f); if (j.mcpServers && j.mcpServers[name]) j.mcpServers[name].disabled = !!disabled; writeJson(f, j); return true; }
-function builtinDisabled(userDir) { return readJson(path.join(userDir, 'builtin-off.json'), []); }
+function builtinDisabled(userDir) { return readList(path.join(userDir, 'builtin-off.json'), 'off').filter((x) => typeof x === 'string'); }
 function toggleBuiltin(userDir, name, disabled) { const l = new Set(builtinDisabled(userDir)); disabled ? l.add(name) : l.delete(name); writeJson(path.join(userDir, 'builtin-off.json'), Array.from(l)); }
 function importClaudeMcp(userDir) {
   const f = path.join(os.homedir(), '.claude.json'); const j = readJson(f); const src = j.mcpServers || {}; const dest = path.join(userDir, 'mcp.json'); const cur = readJson(dest); cur.mcpServers = cur.mcpServers || {}; let n = 0;
@@ -46,26 +49,26 @@ function importClaudeMcp(userDir) {
 const HOOK_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'PreCompact', 'Notification'];
 function listHooks(userDir, cwd) {
   const out = []; const f = hookFiles(userDir, cwd);
-  for (const scope of ['user', 'project']) { if (!f[scope]) continue; for (const h of readJson(f[scope], [])) out.push({ ...h, scope }); }
+  for (const scope of ['user', 'project']) { if (!f[scope]) continue; for (const h of readList(f[scope], 'hooks').filter((x) => x && typeof x === 'object')) out.push({ ...h, scope }); }
   return out;
 }
 function addHook(userDir, cwd, h) {
   if (!HOOK_EVENTS.includes(h.event)) throw new Error('Unknown event ' + h.event); if (!h.command || !h.command.trim()) throw new Error('Enter a shell command.');
-  try { new RegExp(h.matcher || '*'); } catch (_) { throw new Error('Matcher must be a valid regular expression (or *).'); }
+  try { if (h.matcher && h.matcher !== '*') new RegExp(h.matcher); } catch (_) { throw new Error('Matcher must be a valid regular expression (or *).'); }
   const f = hookFiles(userDir, cwd)[h.scope === 'project' ? 'project' : 'user']; if (!f) throw new Error('Open a project folder first to add a project hook.');
-  const list = readJson(f, []); list.push({ id: crypto.randomUUID().slice(0, 8), event: h.event, matcher: h.matcher || '*', command: h.command, enabled: true }); writeJson(f, list); return true;
+  const list = readList(f, 'hooks'); list.push({ id: crypto.randomUUID().slice(0, 8), event: h.event, matcher: h.matcher || '*', command: h.command, enabled: true }); writeJson(f, list); return true;
 }
-function removeHook(userDir, cwd, id, scope) { const f = hookFiles(userDir, cwd)[scope]; if (!f) return false; writeJson(f, readJson(f, []).filter((h) => h.id !== id)); return true; }
-function toggleHook(userDir, cwd, id, scope, enabled) { const f = hookFiles(userDir, cwd)[scope]; if (!f) return false; writeJson(f, readJson(f, []).map((h) => (h.id === id ? { ...h, enabled } : h))); return true; }
+function removeHook(userDir, cwd, id, scope) { const f = hookFiles(userDir, cwd)[scope]; if (!f) return false; writeJson(f, readList(f, 'hooks').filter((h) => h.id !== id)); return true; }
+function toggleHook(userDir, cwd, id, scope, enabled) { const f = hookFiles(userDir, cwd)[scope]; if (!f) return false; writeJson(f, readList(f, 'hooks').map((h) => (h.id === id ? { ...h, enabled } : h))); return true; }
 
 // ---- settings: user < project < local, plus mcp and hook files ----
 function loadSettings(userDir, cwd) {
   const out = { permissions: { allow: [], ask: [], deny: [] }, hooks: {}, mcpServers: {}, env: {} };
   for (const f of settingsPaths(userDir, cwd || os.homedir())) {
     const s = readJson(f);
-    for (const k of ['allow', 'ask', 'deny']) out.permissions[k] = out.permissions[k].concat((s.permissions && s.permissions[k]) || []);
+    for (const k of ['allow', 'ask', 'deny']) out.permissions[k] = out.permissions[k].concat(Array.isArray(s.permissions && s.permissions[k]) ? s.permissions[k] : []);
     if (s.permissions && s.permissions.defaultMode) out.permissions.defaultMode = s.permissions.defaultMode;
-    for (const [ev, list] of Object.entries(s.hooks || {})) out.hooks[ev] = (out.hooks[ev] || []).concat(list);
+    for (const [ev, list] of Object.entries(s.hooks && typeof s.hooks === 'object' && !Array.isArray(s.hooks) ? s.hooks : {})) out.hooks[ev] = (out.hooks[ev] || []).concat(Array.isArray(list) ? list : []);
     Object.assign(out.mcpServers, s.mcpServers || {}); Object.assign(out.env, s.env || {});
     for (const k of Object.keys(s)) if (!['permissions', 'hooks', 'mcpServers', 'env'].includes(k)) out[k] = s[k];
   }

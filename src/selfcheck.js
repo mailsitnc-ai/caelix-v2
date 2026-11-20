@@ -156,6 +156,10 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     await click('#btn-hooks'); await until(`document.querySelector('.modal') && document.querySelector('.modal').innerText.includes('Lifecycle Hooks')`, 8000); await sleep(300);
     await ev(`Array.from(document.querySelectorAll('.chipbtn')).find(b=>b.textContent.includes('Block Force Push')).click()`); await until(`document.querySelector('.modal').innerText.includes('PreToolUse')`, 8000, 'hook added'); await sleep(300); await shot('16-hooks-modal');
     const hk0 = await ev(`window.caelix.hooksList(${JSON.stringify(work)})`); pass('Hooks screen adds the Block Force Push preset', hk0.some((h) => h.event === 'PreToolUse' && h.matcher === '^bash$' && h.enabled));
+    { const fsx = require('fs'), pth = require('path'); const od = pth.join(work, '.caelix'); fsx.mkdirSync(od, { recursive: true });
+      fsx.writeFileSync(pth.join(od, 'hooks.json'), JSON.stringify({ hooks: [{ id: 'foreign', event: 'Stop', matcher: '*', command: 'true', enabled: true }] })); fsx.writeFileSync(pth.join(od, 'settings.json'), '"junk"');
+      const hf = await ev(`window.caelix.hooksList(${JSON.stringify(work)})`); pass('files in a different layout (object hooks file, junk settings) do not crash hooks', Array.isArray(hf) && !hf.__error, JSON.stringify(hf).slice(0, 120));
+      fsx.rmSync(od, { recursive: true, force: true }); }
     await closeModals();
     await click('#chip-model'); await until(`document.querySelectorAll('.mpicker .mi').length>=5`, 8000, 'model picker'); await sleep(300); await shot('17-model-picker');
     const og = await ev(`(function(){const g=document.querySelector('.mpicker .mg'); const items=[]; let n=g.nextSibling; while(n&&!n.classList.contains('mg')){ if(n.classList.contains('mi')) items.push(n.querySelector('.mn').textContent); n=n.nextSibling;} return {h:g.textContent, items, refresh: !!Array.from(document.querySelectorAll('.mtop button')).find(b=>b.textContent==='Refresh')}})()`);

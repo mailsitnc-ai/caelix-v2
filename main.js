@@ -10,6 +10,13 @@ const ROOT = __dirname;
 const SELF = process.argv.includes('--self-check');
 const ICON = path.join(ROOT, 'assets', 'icons', 'icon.png');
 if (SELF) app.setPath('userData', path.join(require('os').tmpdir(), 'caelix-selfcheck-userdata'));
+else {
+  // Own data folder, so files written by the earlier CAELIX (different formats) never break this one.
+  // Saved provider keys are copied over once, because their format is the same.
+  const oldDir = app.getPath('userData'); const newDir = path.join(path.dirname(oldDir), 'CAELIX v2');
+  try { fs.mkdirSync(newDir, { recursive: true }); for (const f of ['keys.enc.json', 'keys.enc']) { const a = path.join(oldDir, f), b = path.join(newDir, f); if (fs.existsSync(a) && !fs.existsSync(b)) fs.copyFileSync(a, b); } } catch (_) {}
+  app.setPath('userData', newDir);
+}
 if (SELF) { try { fs.rmSync(app.getPath('userData'), { recursive: true, force: true }); } catch (_) {} }
 
 let win = null; const timing = { boot: BOOT };
