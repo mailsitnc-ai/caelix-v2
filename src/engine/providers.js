@@ -7,10 +7,10 @@ const PROVIDERS = [
   { id: 'openrouter', name: 'OpenRouter', base: 'https://openrouter.ai/api/v1', keyHint: 'sk-or-…', docs: 'https://openrouter.ai/keys' },
   { id: 'nvidia', name: 'NVIDIA NIM', base: 'https://integrate.api.nvidia.com/v1', keyHint: 'nvapi-…', docs: 'https://build.nvidia.com' },
   { id: 'groq', name: 'Groq', base: 'https://api.groq.com/openai/v1', keyHint: 'gsk_…', docs: 'https://console.groq.com/keys' },
-  { id: 'coarena', name: 'CoArena', base: '', editableBase: true, keyHint: 'key', note: 'Endpoint not published: paste its OpenAI-compatible base URL.' },
-  { id: 'kilo', name: 'Kilo Gateway', base: 'https://api.kilo.ai/api/gateway', keyHint: 'key', docs: 'https://kilo.ai' },
-  { id: 'zen', name: 'OpenCode Zen', base: 'https://opencode.ai/zen/v1', keyHint: 'key', docs: 'https://opencode.ai/zen' },
-  { id: 'nous', name: 'Nous', base: 'https://inference-api.nousresearch.com/v1', keyHint: 'key', docs: 'https://portal.nousresearch.com' },
+  { id: 'coarena', name: 'CoArena', base: 'https://coarena.ai/api/v1', editableBase: true, keyHint: 'key', docs: 'https://coarena.ai/account/api', note: 'Uses https://coarena.ai/. Create a key at coarena.ai/account/api.' },
+  { id: 'kilo', name: 'Kilo Gateway', base: 'https://ai-gateway.kilo.ai/api/v1', keyOptional: true, anonymous: true, keyHint: 'optional', docs: 'https://kilo.ai', note: 'Built in: free models work with no key.' },
+  { id: 'zen', name: 'OpenCode Zen', base: 'https://opencode.ai/zen/v1', keyOptional: true, anonymous: true, keyHint: 'optional', docs: 'https://opencode.ai/zen', note: 'Built in: free models work with no key.' },
+  { id: 'numes', name: 'Numes', base: 'https://api.numes.ai/api/v1', keyHint: 'key', docs: 'https://numes.ai/dashboard/keys' },
   { id: 'abliteration', name: 'Abliteration AI', base: 'https://api.abliteration.ai/v1', keyHint: 'key', docs: 'https://abliteration.ai' },
   { id: 'omniroute', name: 'OmniRoute', virtual: true, base: '', editableBase: true, keyOptional: true,
     note: 'Routes across your connected providers. Optionally set the base URL of a self-hosted OmniRoute server.' },
@@ -144,7 +144,7 @@ function routeCandidates(objective, byProvider) {
   for (const [pid, models] of Object.entries(byProvider)) {
     if (pid === 'omniroute' || pid === 'pretend') continue;
     const ranked = models.map((m) => ({ ...m, s: score(obj, m) })).filter((m) => m.s >= 0).sort((a, b) => b.s - a.s);
-    ranked.slice(0, 2).forEach((m, i) => list.push({ provider: pid, model: m.id, s: m.s - i * 0.5 }));
+    ranked.slice(0, 2).forEach((m, i) => list.push({ provider: pid, model: m.id, s: m.s - i * 0.5 - (byId(pid) && byId(pid).anonymous ? 3 : 0) }));
   }
   return list.sort((a, b) => b.s - a.s);
 }

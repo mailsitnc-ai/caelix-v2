@@ -20,8 +20,8 @@
     host().innerHTML = ''; const body = el('div'); const info = await api.init(); S.providers = info.providers;
     if (!info.secure) body.appendChild(el('div', 'err', 'Secure storage is not available on this computer, so keys cannot be saved.'));
     function row(p) {
-      const r = el('div', 'prow'); const ok = p.virtual ? true : p.hasKey;
-      r.innerHTML = `<div class="pt"><i style="width:10px;height:10px;border-radius:50%;background:${DOT[p.id] || '#4d9bff'};display:inline-block"></i> ${esc(p.name)} <span class="badge ${ok ? 'ok' : ''}">${p.virtual ? 'built in' : p.hasKey ? 'connected · ' + esc(p.masked) : 'not connected'}</span></div>${p.note ? `<div class="pn">${esc(p.note)}</div>` : ''}`;
+      const r = el('div', 'prow'); const ok = p.virtual || p.hasKey || p.anonymous;
+      r.innerHTML = `<div class="pt"><i style="width:10px;height:10px;border-radius:50%;background:${DOT[p.id] || '#4d9bff'};display:inline-block"></i> ${esc(p.name)} <span class="badge ${ok ? 'ok' : ''}">${p.virtual || (p.anonymous && !p.hasKey) ? 'built in · no key needed' : p.hasKey ? 'connected · ' + esc(p.masked) : 'not connected'}</span></div>${p.note ? `<div class="pn">${esc(p.note)}</div>` : ''}`;
       if (p.editableBase) { const f = el('div', 'f'); const i = el('input'); i.placeholder = p.id === 'omniroute' ? 'Optional OmniRoute server URL, e.g. http://localhost:20128/v1' : 'OpenAI-compatible base URL'; i.value = p.base || ''; f.append(i, btn('Save URL', '', async () => { S.providers = await api.setBase(p.id, i.value); toast('Base URL saved'); })); r.appendChild(f); }
       if (!p.virtual) {
         const f = el('div', 'f'); const i = el('input'); i.type = 'password'; i.placeholder = p.hasKey ? 'Replace key (' + p.masked + ')' : 'Paste ' + (p.keyHint || 'key'); i.autocomplete = 'off'; i.spellcheck = false;
@@ -67,14 +67,14 @@
         ms.slice(0, q ? 300 : 120).forEach((m) => list.appendChild(item(g, m)));
         if (!q && ms.length > 120) list.appendChild(el('div', 'info', `${ms.length - 120} more: type to search`));
       }
-      const missing = S.providers.filter((p) => !p.virtual && !p.hasKey);
+      const missing = S.providers.filter((p) => !p.virtual && !p.hasKey && !p.anonymous);
       if (!q && missing.length) { const d = el('div', 'mg', 'Not connected'); const n = el('div', 'info', 'Add a key to load models from: ' + esc(missing.map((p) => p.name).join(', ')) + ' — '); const l = el('a', null, 'open Keys'); l.href = '#'; l.style.color = 'var(--accent2)'; l.onclick = (e) => { e.preventDefault(); close(); keys(); }; n.appendChild(l); list.append(d, n); }
     }
     inp.oninput = draw; inp.focus();
     async function load(force) {
       const info = await api.init(); S.providers = info.providers; S.fav = info.fav || []; favs = new Set(S.fav);
       groups = [{ id: 'omniroute', name: 'OmniRoute', models: await api.models('omniroute').catch(() => []) }];
-      for (const p of S.providers.filter((p) => !p.virtual && p.hasKey)) groups.push({ id: p.id, name: p.name, models: force ? [] : S.models[p.id] || [], loading: force || !S.models[p.id] });
+      for (const p of S.providers.filter((p) => !p.virtual && (p.hasKey || p.anonymous))) groups.push({ id: p.id, name: p.name, models: force ? [] : S.models[p.id] || [], loading: force || !S.models[p.id] });
       groups.push({ id: 'pretend', name: 'Pretend AI (offline test)', models: await api.models('pretend') }); draw();
       groups.filter((g) => g.loading).forEach(async (g) => { try { g.models = await api.models(g.id, force); S.models[g.id] = g.models; g.err = ''; } catch (e) { g.err = e.message; g.models = []; } g.loading = false; draw(); });
     }

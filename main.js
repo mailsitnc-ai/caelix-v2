@@ -72,7 +72,7 @@ function envFor(L) {
   return {
     userDir: userDir(), settings, signal: L.ctrl.signal, docsDir: CHAT_DIR, renderDocument,
     getCreds: (pid) => ({ key: keys.get(pid), base: readProv().bases[pid] || '' }),
-    connected: () => providers.PROVIDERS.filter((p) => !p.virtual && keys.has(p.id)).map((p) => p.id),
+    connected: () => providers.PROVIDERS.filter((p) => !p.virtual && (keys.has(p.id) || p.anonymous)).map((p) => p.id),
     bases: () => readProv().bases,
     emit: (e) => { record(L, e); send('evt', { sid: L.meta.id, e }); if (e.type === 'turn_end') { const sm = summaryFor(L); if (sm) { L.items.push({ type: 'summary', ...sm }); send('evt', { sid: L.meta.id, e: { type: 'summary', summary: sm } }); } } },
     ask: (req) => new Promise((resolve) => {
@@ -107,7 +107,7 @@ function handle(name, fn) { ipcMain.handle(name, async (_e, ...a) => { try { ret
 
 function providerState() {
   const { providers } = E(); const pv = readProv();
-  return providers.PROVIDERS.filter((p) => !p.hidden).map((p) => ({ id: p.id, name: p.name, virtual: !!p.virtual, keyOptional: !!p.keyOptional, editableBase: !!p.editableBase, base: pv.bases[p.id] || p.base || '', keyHint: p.keyHint || '', note: p.note || '', docs: p.docs || '', hasKey: keys.has(p.id), masked: keys.masked(p.id) }));
+  return providers.PROVIDERS.filter((p) => !p.hidden).map((p) => ({ id: p.id, name: p.name, virtual: !!p.virtual, keyOptional: !!p.keyOptional, anonymous: !!p.anonymous, editableBase: !!p.editableBase, base: pv.bases[p.id] || p.base || '', keyHint: p.keyHint || '', note: p.note || '', docs: p.docs || '', hasKey: keys.has(p.id), masked: keys.masked(p.id) }));
 }
 
 function registerIpc() {

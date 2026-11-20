@@ -36,7 +36,7 @@ Same layout, panels, sizes and flow. Verified by side-by-side screenshot compari
 
 - Runs on the user's own **Gemini**, **OpenRouter** and **NVIDIA** keys, pasted on a Keys screen, with any model each of them offers (model list fetched live, searchable).
 - Keys are stored encrypted on this computer, outside the project folder, and never shown in full.
-- Providers: Google Gemini, OpenRouter, NVIDIA NIM, Groq, CoArena (custom endpoint), Kilo Gateway, OpenCode Zen, Nous, Abliteration AI, and **OmniRoute** (auto, auto/coding, auto/fast, auto/cheap, auto/smart routing across connected providers). Models load as soon as a key is saved.
+- Providers: Google Gemini, OpenRouter, NVIDIA NIM, Groq, CoArena (custom endpoint), Kilo Gateway, OpenCode Zen (built in, no key), Numes, Abliteration AI, and **OmniRoute** (auto, auto/coding, auto/fast, auto/cheap, auto/smart routing across connected providers). Models load as soon as a key is saved.
 - The real Claude Code engine option was dropped.
 
 ## 5. Speed
