@@ -36,7 +36,8 @@ Same layout, panels, sizes and flow. Verified by side-by-side screenshot compari
 
 - Runs on the user's own **Gemini**, **OpenRouter** and **NVIDIA** keys, pasted on a Keys screen, with any model each of them offers (model list fetched live, searchable).
 - Keys are stored encrypted on this computer, outside the project folder, and never shown in full.
-- Can also run the **real Claude Code** as an alternative engine (when installed and signed in), driven through its streaming mode.
+- Providers: Google Gemini, OpenRouter, NVIDIA NIM, Groq, CoArena (custom endpoint), Kilo Gateway, OpenCode Zen, Nous, Abliteration AI, and **OmniRoute** (auto, auto/coding, auto/fast, auto/cheap, auto/smart routing across connected providers). Models load as soon as a key is saved.
+- The real Claude Code engine option was dropped.
 
 ## 5. Speed
 
@@ -47,9 +48,18 @@ Same layout, panels, sizes and flow. Verified by side-by-side screenshot compari
 ## 6. Identity
 
 - Name: **CAELIX** (window title, menus, app metadata, package config, interface, installed app, desktop shortcut).
-- Icon: the supplied CAELIX star icon, used as-is (`assets/source/caelix-icon-original.webp`); sizes and `.icns` generated from it by `scripts/make-icons.py`. No generated or substitute icon.
-- No Claude or Anthropic names or logos in the product, except where needed to name a supported provider or explain compatibility (for example the "real Claude Code" engine option).
+- Icon: the supplied CAELIX star icon, used as-is (v2 redesign: `assets/source/caelix-icon-blue-original.webp`); sizes and `.icns` generated from it by `scripts/make-icons.py`. No generated or substitute icon.
+- No Claude or Anthropic names or logos in the product, except where needed to name a supported provider or explain compatibility.
 
 ## Technology
 
 Electron with plain HTML, CSS and JavaScript. No React, no build tools, no packages that need compiling.
+
+## v2 redesign additions
+
+- **Blue and black liquid-glass design**, using the v1 layout: top bar with Chat | Code switch, mode / Team / model / view chips, MCP, Hooks, Browser and Keys buttons; sidebar with grouped history; right panel with Changes, Terminal, Browser and Context tabs.
+- **Chat and Code are separate.** Chat needs no folder, never touches files or runs commands, and can create documents (md, txt, html, pdf) in `~/Documents/CAELIX Chats`. Code needs a project folder to start a session; old Code sessions keep the folder they started in.
+- **2,000,000-token context.** `/reset` summarises everything, keeps memory, and returns the token count to baseline; it also runs automatically at 80%. `/compact` (also `/compat`) summarises older messages only. Context panel shows the breakdown.
+- **Commands:** /reset /compact /compat /btw /clear /new /chat /code /model /mode /plan /team /agents /rename /rewind /diff /terminal /browser /files /context /cost /memory /remember /init /export /copy /skills /hooks /mcp /keys /settings /system /docs /fork /theme /view /help.
+- **MCP manager** (stdio and HTTP, project and user scopes, import, quick-add, reconnect) with built-in `desktop` and `memory` servers. **Hooks manager** (events, matcher, scope, presets).
+- **New logo:** the supplied blue star icon (`assets/source/caelix-icon-blue-original.webp`).

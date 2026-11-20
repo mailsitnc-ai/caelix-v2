@@ -41,7 +41,7 @@ function decide({ tool, input, mode, rules, cwd }) {
     if (tool === 'Bash') return SAFE_BASH.test(bash) ? { d: 'allow', why: 'read-only command' } : { d: 'deny', why: 'plan mode allows only read-only commands' };
   }
   if (tool === 'ExitPlanMode') return { d: 'allow', why: 'asks the user itself' };
-  if (['Read', 'Glob', 'Grep', 'TodoWrite', 'AskUserQuestion', 'EnterPlanMode', 'Skill', 'TaskStop', 'Agent'].includes(tool)) return { d: 'allow', why: 'read-only tool' };
+  if (['Read', 'Glob', 'Grep', 'TodoWrite', 'AskUserQuestion', 'EnterPlanMode', 'Skill', 'TaskStop', 'Agent', 'WriteDocument'].includes(tool)) return { d: 'allow', why: 'read-only tool' };
   if (mode === 'dontAsk') return { d: 'deny', why: "don't-ask mode allows only pre-approved tools" };
   if (mode === 'auto') return { d: 'allow', why: 'auto mode' };
   if (mode === 'acceptEdits' && (mut || (tool === 'Bash' && FS_BASH.test(bash)))) return { d: 'allow', why: 'accept-edits mode' };

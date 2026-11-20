@@ -15,10 +15,12 @@ if (SELF) { try { fs.rmSync(app.getPath('userData'), { recursive: true, force: t
 let win = null; const timing = { boot: BOOT };
 const live = new Map(); // sessionId -> live state
 let keys, store, engine = null;
+const CHAT_DIR = SELF ? path.join(require('os').tmpdir(), 'caelix-selfcheck-chats') : path.join(app.getPath('documents'), 'CAELIX Chats');
+const mcpPool = new Map(); // config key -> connection
 
 const E = () => engine || (engine = {
   agent: require('./src/engine/agent'), providers: require('./src/engine/providers'), config: require('./src/engine/config'),
-  runtime: require('./src/engine/runtime'), perms: require('./src/engine/permissions'), diff: require('./src/engine/diff'), mcp: require('./src/engine/mcp'),
+  runtime: require('./src/engine/runtime'), mcpBuiltinDesc: (n) => (require('./src/engine/builtin').builtins('', '')[n] || { description: '' }).description, perms: require('./src/engine/permissions'), diff: require('./src/engine/diff'), mcp: require('./src/engine/mcp'),
 });
 const userDir = () => app.getPath('userData');
 const provFile = () => path.join(userDir(), 'providers.json');
@@ -30,25 +32,33 @@ const send = (ch, payload) => { if (win && !win.isDestroyed()) win.webContents.s
 function serSnap(m) { return Array.from(m.entries()); }
 function saveSession(L) {
   const { rt, meta } = L; meta.updated = Date.now();
-  store.save({ ...meta, messages: rt.messages, items: L.items, usage: rt.usage, turn: rt.turn, effort: rt.effort,
+  store.save({ ...meta, messages: rt.messages, items: L.items, usage: rt.usage, turn: rt.turn, effort: rt.effort, kind: rt.kind, summary: rt.summary || '', team: !!rt.team,
     checkpoints: rt.checkpoints.map((c) => ({ turn: c.turn, msgIndex: c.msgIndex, prompt: c.prompt, snap: serSnap(c.snap) })), baseSnap: serSnap(rt.baseSnap), todos: rt.st.todos, mode: rt.st.mode, cwd: rt.st.cwd });
 }
 function makeLive(s) {
   const { newRuntime } = E().runtime;
-  const rt = newRuntime({ provider: s.provider, model: s.model, cwd: s.cwd, mode: s.mode, messages: s.messages || [], checkpoints: (s.checkpoints || []).map((c) => ({ ...c, snap: new Map(c.snap) })) });
-  rt.baseSnap = new Map(s.baseSnap || []); rt.turn = s.turn || 0; rt.usage = s.usage || { in: 0, out: 0 }; rt.effort = s.effort || 'medium'; rt.st.todos = s.todos || [];
-  const meta = { id: s.id, title: s.title, cwd: s.cwd, created: s.created, updated: s.updated, archived: !!s.archived, pinned: !!s.pinned, provider: s.provider, model: s.model, mode: s.mode, effort: rt.effort };
+  const rt = newRuntime({ provider: s.provider, model: s.model, cwd: s.cwd, mode: s.mode, kind: s.kind || 'code', messages: s.messages || [], checkpoints: (s.checkpoints || []).map((c) => ({ ...c, snap: new Map(c.snap) })) });
+  rt.baseSnap = new Map(s.baseSnap || []); rt.turn = s.turn || 0; rt.usage = s.usage || { in: 0, out: 0 }; rt.effort = s.effort || 'medium'; rt.st.todos = s.todos || []; rt.summary = s.summary || ''; rt.team = !!s.team;
+  const meta = { id: s.id, title: s.title, cwd: s.cwd, created: s.created, updated: s.updated, archived: !!s.archived, pinned: !!s.pinned, provider: s.provider, model: s.model, mode: s.mode, effort: rt.effort, kind: rt.kind, team: rt.team };
   const L = { meta, rt, items: s.items || [], ctrl: null, asks: new Map(), busy: false, askSeq: 0, bg: [], assistantBuf: '' };
   live.set(s.id, L); return L;
 }
 function getLive(id) { return live.get(id) || (store.load(id) && makeLive(store.load(id))); }
 
+function summaryFor(L) {
+  let i = L.items.length - 1; while (i >= 0 && L.items[i].type !== 'user') i--; const tools = L.items.slice(i + 1).filter((x) => x.type === 'tool' && x.output !== undefined);
+  if (!tools.length) return null; const failed = tools.filter((t) => t.error); const files = [];
+  for (const t of tools) { if (t.error) continue; const f = t.input && (t.input.file_path || t.input.notebook_path || t.input.filename); if (f && ['Write', 'Edit', 'NotebookEdit', 'WriteDocument'].includes(t.name)) { const b = path.basename(f); if (!files.includes(b)) files.push(b); } }
+  const last = failed[failed.length - 1];
+  return { actions: tools.length, ok: tools.length - failed.length, failed: failed.length, failedNames: Array.from(new Set(failed.map((t) => t.name))).slice(0, 4), files: files.slice(0, 8), issue: last ? String(last.output || '').split('\n')[0].slice(0, 220) : '', secs: ((Date.now() - (L.turnT0 || Date.now())) / 1000).toFixed(1) };
+}
 function record(L, e) {
   switch (e.type) {
+    case 'turn_start': L.turnT0 = Date.now(); break;
     case 'text': L.assistantBuf += e.delta; break;
     case 'text_end': if (L.assistantBuf.trim()) L.items.push({ type: 'assistant', text: L.assistantBuf }); L.assistantBuf = ''; break;
     case 'tool_start': L.items.push({ type: 'tool', id: e.id, name: e.name, input: e.input, summary: e.summary }); break;
-    case 'tool_result': { const it = L.items.find((x) => x.type === 'tool' && x.id === e.id); if (it) { it.output = e.output; it.error = e.error; it.ms = e.ms; } break; }
+    case 'tool_result': { const it = [...L.items].reverse().find((x) => x.type === 'tool' && x.id === e.id); if (it) { it.output = e.output; it.error = e.error; it.ms = e.ms; } break; }
     case 'error': L.items.push({ type: 'error', message: e.message }); break;
     case 'todos': { const i = L.items.findIndex((x) => x.type === 'todos'); const t = { type: 'todos', todos: e.todos }; if (i >= 0) L.items.splice(i, 1); L.items.push(t); break; }
     case 'compacted': L.items.push({ type: 'info', text: `Conversation compacted (${e.before} → ${e.after} messages).` }); break;
@@ -60,11 +70,11 @@ function envFor(L) {
   const { providers, config } = E();
   const settings = config.loadSettings(userDir(), L.rt.st.cwd);
   return {
-    userDir: userDir(), settings, signal: L.ctrl.signal,
+    userDir: userDir(), settings, signal: L.ctrl.signal, docsDir: CHAT_DIR, renderDocument,
     getCreds: (pid) => ({ key: keys.get(pid), base: readProv().bases[pid] || '' }),
     connected: () => providers.PROVIDERS.filter((p) => !p.virtual && keys.has(p.id)).map((p) => p.id),
     bases: () => readProv().bases,
-    emit: (e) => { record(L, e); send('evt', { sid: L.meta.id, e }); },
+    emit: (e) => { record(L, e); send('evt', { sid: L.meta.id, e }); if (e.type === 'turn_end') { const sm = summaryFor(L); if (sm) { L.items.push({ type: 'summary', ...sm }); send('evt', { sid: L.meta.id, e: { type: 'summary', summary: sm } }); } } },
     ask: (req) => new Promise((resolve) => {
       const id = 'ask' + (++L.askSeq); L.asks.set(id, resolve);
       send('evt', { sid: L.meta.id, e: { type: 'ask', id, req } });
@@ -73,12 +83,23 @@ function envFor(L) {
   };
 }
 
+async function getMcp(cwd, settings, force) {
+  const key = (cwd || '') + '|' + JSON.stringify(settings.mcpServers || {}) + '|' + JSON.stringify(settings.builtinOff || []);
+  if (force) { for (const pr of mcpPool.values()) Promise.resolve(pr).then((c) => c && c.stop && c.stop()).catch(() => {}); mcpPool.clear(); }
+  if (!mcpPool.has(key)) mcpPool.set(key, E().mcp.connectAll(settings.mcpServers, cwd, { userDir: userDir(), disabled: settings.builtinOff }).catch((e) => ({ defs: [], route: {}, servers: [], errors: [e.message], stop() {} })));
+  return mcpPool.get(key);
+}
 async function ensureMcp(L, env) {
-  const cfg = JSON.stringify(env.settings.mcpServers || {}); if (cfg === '{}') { L.rt.mcp = null; return; }
-  if (L.mcpCfg === cfg && L.rt.mcp) return;
-  if (L.rt.mcp) L.rt.mcp.stop();
-  L.rt.mcp = await E().mcp.connectAll(env.settings.mcpServers, L.rt.st.cwd); L.mcpCfg = cfg;
+  const cwd = L.rt.kind === 'chat' ? CHAT_DIR : L.rt.st.cwd; L.rt.mcp = await getMcp(cwd, env.settings);
   send('evt', { sid: L.meta.id, e: { type: 'mcp', servers: L.rt.mcp.servers.map((s) => ({ name: s.name, tools: s.tools.length })), errors: L.rt.mcp.errors } });
+}
+function mdToHtml(src) { const md = require('./renderer/md.js'); return `<!doctype html><meta charset="utf-8"><style>body{font:14px/1.6 -apple-system,Helvetica,Arial,sans-serif;color:#111;max-width:760px;margin:36px auto;padding:0 24px}h2,h3,h4{margin:1.3em 0 .4em}code{background:#f0f2f6;padding:1px 5px;border-radius:4px;font-family:Menlo,monospace;font-size:12.5px}pre{background:#f0f2f6;padding:10px 12px;border-radius:8px;overflow:auto}blockquote{border-left:3px solid #cbd3e0;margin:0;padding-left:12px;color:#556}a{color:#1a56db}</style>${md.render(src)}`; }
+async function renderDocument(file, content, fmt) {
+  const html = /<html|<!doctype/i.test(content) ? content : mdToHtml(content);
+  if (fmt === 'html') { fs.writeFileSync(file, html); return file; }
+  const w = new BrowserWindow({ show: false, webPreferences: { sandbox: true, offscreen: false } });
+  try { await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)); const pdf = await w.webContents.printToPDF({ printBackground: true, pageSize: 'A4' }); fs.writeFileSync(file, pdf); } finally { w.destroy(); }
+  return file;
 }
 
 // ---------- IPC ----------
@@ -92,7 +113,7 @@ function providerState() {
 function registerIpc() {
   handle('app:init', () => {
     const pv = readProv();
-    return { version: app.getVersion(), providers: providerState(), sessions: store.list(), last: pv.last || {}, userDir: userDir(), home: app.getPath('home'), secure: keys.available(), self: SELF };
+    return { version: app.getVersion(), providers: providerState(), sessions: store.list(), last: pv.last || {}, userDir: userDir(), home: app.getPath('home'), secure: keys.available(), self: SELF, chatDir: CHAT_DIR, fav: pv.fav || [] };
   });
   handle('keys:set', (id, key) => { if (!key || key.trim().length < 4) throw new Error('That key looks too short.'); keys.set(id, key); return providerState(); });
   handle('keys:remove', (id) => { keys.remove(id); return providerState(); });
@@ -100,14 +121,17 @@ function registerIpc() {
   handle('models:list', async (pid, force) => { const { providers } = E(); return providers.listModels(pid, keys.get(pid), readProv().bases, { force }); });
   handle('last:set', (patch) => { const pv = readProv(); pv.last = { ...(pv.last || {}), ...patch }; writeProv(pv); return true; });
 
-  handle('session:new', ({ cwd, provider, model, mode }) => {
+  handle('session:new', ({ cwd, provider, model, mode, kind }) => {
+    kind = kind === 'chat' ? 'chat' : 'code';
+    if (kind === 'code') { if (!cwd) throw new Error('Code sessions need a project folder. Open a folder first.'); if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error('That folder does not exist.'); }
+    else { fs.mkdirSync(CHAT_DIR, { recursive: true }); cwd = CHAT_DIR; mode = 'auto'; }
     const id = store.newId(); const now = Date.now();
-    const s = { id, title: 'New session', cwd, created: now, updated: now, provider, model, mode: mode || 'default', messages: [], items: [], checkpoints: [], baseSnap: [] };
+    const s = { id, kind, title: kind === 'chat' ? 'New chat' : 'New session', cwd, created: now, updated: now, provider, model, mode: mode || 'default', messages: [], items: [], checkpoints: [], baseSnap: [] };
     const L = makeLive(s); saveSession(L); return { meta: L.meta, items: [] };
   });
   handle('session:open', (id) => {
     const L = getLive(id); if (!L) throw new Error('Session not found');
-    return { meta: { ...L.meta, mode: L.rt.st.mode, cwd: L.rt.st.cwd }, items: L.items, busy: L.busy, todos: L.rt.st.todos, usage: L.rt.usage, checkpoints: L.rt.checkpoints.map((c) => ({ turn: c.turn, prompt: c.prompt })), ctx: E().agent.estTokens(L.rt.messages), ctxLimit: L.rt.ctxLimit };
+    return { meta: { ...L.meta, mode: L.rt.st.mode, cwd: L.rt.st.cwd, kind: L.rt.kind, team: L.rt.team }, items: L.items, busy: L.busy, todos: L.rt.st.todos, usage: L.rt.usage, checkpoints: L.rt.checkpoints.map((c) => ({ turn: c.turn, prompt: c.prompt })), ctx: E().agent.estTokens(L.rt.messages), ctxLimit: L.rt.ctxLimit, breakdown: E().agent.breakdown(L.rt.messages) };
   });
   handle('session:list', () => { const l = store.list(); for (const x of l) { const L = live.get(x.id); if (L) { x.running = L.busy; x.title = L.meta.title; } } return l; });
   handle('session:set', (id, patch) => {
@@ -115,7 +139,7 @@ function registerIpc() {
     if (patch.provider) { rt.provider = meta.provider = patch.provider; } if (patch.model) { rt.model = meta.model = patch.model; }
     if (patch.mode) { rt.st.mode = meta.mode = patch.mode; } if (patch.effort) { rt.effort = meta.effort = patch.effort; }
     if (patch.title != null) meta.title = patch.title.slice(0, 120) || meta.title; if (patch.archived != null) meta.archived = patch.archived; if (patch.pinned != null) meta.pinned = patch.pinned;
-    if (patch.cwd) { rt.st.cwd = meta.cwd = patch.cwd; }
+    if (patch.cwd && rt.kind === 'code') { rt.st.cwd = meta.cwd = patch.cwd; } if (patch.team != null) { rt.team = meta.team = !!patch.team; }
     saveSession(L); return meta;
   });
   handle('session:delete', (id) => { const L = live.get(id); if (L && L.ctrl) L.ctrl.abort(); live.delete(id); store.remove(id); return true; });
@@ -126,13 +150,13 @@ function registerIpc() {
   handle('chat:send', async (sid, text) => {
     const L = getLive(sid); if (!L) throw new Error('Session not found'); if (L.busy) throw new Error('Session is busy');
     L.busy = true; L.ctrl = new AbortController(); const env = envFor(L);
-    if (L.meta.title === 'New session') L.meta.title = text.replace(/\s+/g, ' ').slice(0, 56);
+    if (L.meta.title === 'New session' || L.meta.title === 'New chat') L.meta.title = text.replace(/\s+/g, ' ').slice(0, 56);
     L.items.push({ type: 'user', text }); send('sessions-changed', 1);
     (async () => {
       try { await ensureMcp(L, env); } catch (e) { env.emit({ type: 'error', message: 'MCP: ' + e.message }); }
       await E().agent.runTurn(L.rt, env, text);
       L.busy = false; saveSession(L); send('sessions-changed', 1);
-      send('evt', { sid, e: { type: 'idle', ctx: E().agent.estTokens(L.rt.messages), ctxLimit: L.rt.ctxLimit, usage: L.rt.usage, checkpoints: L.rt.checkpoints.map((c) => ({ turn: c.turn, prompt: c.prompt })) } });
+      send('evt', { sid, e: { type: 'idle', ctx: E().agent.estTokens(L.rt.messages), ctxLimit: L.rt.ctxLimit, usage: L.rt.usage, breakdown: E().agent.breakdown(L.rt.messages), checkpoints: L.rt.checkpoints.map((c) => ({ turn: c.turn, prompt: c.prompt })) } });
       if (win && !win.isFocused() && Notification.isSupported() && !SELF) new Notification({ title: 'CAELIX', body: (L.meta.title || 'Session') + ' finished' }).show();
     })();
     return true;
@@ -167,6 +191,34 @@ function registerIpc() {
   handle('memory:add', (sid, text) => E().config.addNote(userDir(), getLive(sid).rt.st.cwd, text));
   handle('memory:show', (sid) => E().config.loadMemory(userDir(), getLive(sid).rt.st.cwd) || '(no memory yet: add a CAELIX.md or AGENTS.md to the project, or use /remember)');
   handle('init:project', (sid) => { const L = getLive(sid); const f = path.join(L.rt.st.cwd, 'CAELIX.md'); if (!fs.existsSync(f)) fs.writeFileSync(f, '# Project instructions\n\n- Describe how to build, test and run this project.\n- Note code style rules the agent must follow.\n'); return f; });
+
+  handle('chat:reset', async (sid) => {
+    const L = getLive(sid); L.ctrl = new AbortController(); const env = envFor(L);
+    const ok = await E().agent.resetContext(L.rt, env, 'manual'); if (ok) L.items.push({ type: 'info', text: 'Context reset: history summarised, memory kept.' }); saveSession(L);
+    return { ok, ctx: E().agent.estTokens(L.rt.messages), breakdown: E().agent.breakdown(L.rt.messages) };
+  });
+  handle('mcp:list', async (sid, cwd, force) => {
+    cwd = cwd || CHAT_DIR; const cfg = E().config; const settings = cfg.loadSettings(userDir(), cwd); const conn = await getMcp(cwd, settings, force);
+    const entries = [];
+    for (const s of conn.servers.filter((x) => x.builtin)) entries.push({ name: s.name, scope: 'built-in', builtin: true, tools: s.tools.length, desc: E().mcpBuiltinDesc(s.name), disabled: false });
+    for (const n of settings.builtinOff || []) entries.push({ name: n, scope: 'built-in', builtin: true, tools: 0, desc: E().mcpBuiltinDesc(n), disabled: true });
+    for (const e of cfg.listMcp(userDir(), cwd === CHAT_DIR ? null : cwd)) { const live = conn.servers.find((x) => x.name === e.name && !x.builtin); const err = conn.errors.find((x) => x.startsWith(e.name + ':')); entries.push({ name: e.name, scope: e.scope, tools: live ? live.tools.length : 0, desc: e.cfg.url || [e.cfg.command].concat(e.cfg.args || []).join(' '), disabled: e.disabled, error: err || '' }); }
+    return entries;
+  });
+  handle('mcp:add', (cwd, o) => { E().config.addMcp(userDir(), cwd === CHAT_DIR ? null : cwd, o); return true; });
+  handle('mcp:remove', (cwd, name, scope) => E().config.removeMcp(userDir(), cwd, name, scope));
+  handle('mcp:toggle', (cwd, name, scope, disabled, builtin) => { if (builtin) E().config.toggleBuiltin(userDir(), name, disabled); else E().config.toggleMcp(userDir(), cwd, name, scope, disabled); return true; });
+  handle('mcp:import', () => E().config.importClaudeMcp(userDir()));
+  handle('hooks:list', (cwd) => E().config.listHooks(userDir(), cwd === CHAT_DIR ? null : cwd));
+  handle('hooks:add', (cwd, h) => E().config.addHook(userDir(), cwd === CHAT_DIR ? null : cwd, h));
+  handle('hooks:remove', (cwd, id, scope) => E().config.removeHook(userDir(), cwd, id, scope));
+  handle('hooks:toggle', (cwd, id, scope, en) => E().config.toggleHook(userDir(), cwd, id, scope, en));
+  handle('memory:info', (cwd) => { const files = E().config.memoryFiles(userDir(), cwd === CHAT_DIR ? null : cwd); const g = require('./src/engine/builtin').globalMemoryText(userDir()); return { count: files.length + (g ? 1 : 0), files: files.map((f) => ({ ...f, text: fs.readFileSync(f.file, 'utf8').slice(0, 6000) })), global: g }; });
+  handle('agents:list', (cwd) => { const out = [{ name: 'Explore', desc: 'Read-only search of the codebase' }, { name: 'Plan', desc: 'Design an approach before coding' }, { name: 'General', desc: 'Full-tool helper for a sub-task' }]; try { const d = path.join(cwd, '.caelix', 'agents'); for (const f of fs.readdirSync(d)) if (f.endsWith('.md')) out.push({ name: f.replace(/\.md$/, ''), desc: 'Custom agent' }); } catch (_) {} return out; });
+  handle('fav:get', () => readProv().fav || []);
+  handle('fav:toggle', (key) => { const pv = readProv(); const f = new Set(pv.fav || []); f.has(key) ? f.delete(key) : f.add(key); pv.fav = Array.from(f); writeProv(pv); return pv.fav; });
+  handle('docs:open', () => { fs.mkdirSync(CHAT_DIR, { recursive: true }); shell.openPath(CHAT_DIR); return CHAT_DIR; });
+  handle('prompt:system', (sid) => E().agent.buildSystem(getLive(sid).rt, { userDir: userDir() }));
 
   handle('diff:get', (sid) => {
     const L = getLive(sid); const { diff } = E(); const out = [];
@@ -229,7 +281,7 @@ function buildMenu() {
 function createWindow() {
   win = new BrowserWindow({
     width: 1408, height: 881, minWidth: 900, minHeight: 600, show: false, title: 'CAELIX', icon: ICON,
-    titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 14 }, backgroundColor: '#ffffff',
+    titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 17 }, backgroundColor: '#05070d',
     webPreferences: { preload: path.join(ROOT, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
   });
   win.once('ready-to-show', () => { timing.windowShown = Date.now() - BOOT; win.show(); });
@@ -248,4 +300,4 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' || SELF) app.quit(); });
-app.on('before-quit', () => { for (const L of live.values()) { try { if (L.ctrl) L.ctrl.abort(); saveSession(L); if (L.rt.mcp) L.rt.mcp.stop(); } catch (_) {} } });
+app.on('before-quit', () => { for (const L of live.values()) { try { if (L.ctrl) L.ctrl.abort(); saveSession(L); } catch (_) {} } for (const c of mcpPool.values()) Promise.resolve(c).then((x) => x && x.stop && x.stop()).catch(() => {}); });

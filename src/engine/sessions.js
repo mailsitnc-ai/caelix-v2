@@ -15,7 +15,7 @@ function createSessionStore(dir) {
       const out = [];
       for (const f of fs.readdirSync(d)) {
         if (!f.endsWith('.json')) continue;
-        try { const s = JSON.parse(fs.readFileSync(path.join(d, f), 'utf8')); out.push({ id: s.id, title: s.title, cwd: s.cwd, updated: s.updated, created: s.created, archived: !!s.archived, pinned: !!s.pinned, provider: s.provider, model: s.model, running: false, changes: s.changes || 0 }); } catch (_) {}
+        try { const s = JSON.parse(fs.readFileSync(path.join(d, f), 'utf8')); out.push({ id: s.id, kind: s.kind || 'code', title: s.title, cwd: s.cwd, updated: s.updated, created: s.created, archived: !!s.archived, pinned: !!s.pinned, provider: s.provider, model: s.model, running: false, changes: s.changes || 0 }); } catch (_) {}
       }
       return out.sort((a, b) => b.updated - a.updated);
     },

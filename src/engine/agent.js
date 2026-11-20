@@ -4,22 +4,33 @@ const os = require('os');
 const path = require('path');
 const providers = require('./providers');
 const { streamPretend } = require('./pretend');
-const { IMPL, DEFS, READ_ONLY, toolDefs } = require('./tools');
+const { IMPL, DEFS, READ_ONLY, CHAT_TOOLS, toolDefs } = require('./tools');
 const { decide, summarize, ruleFor, SAFE_BASH } = require('./permissions');
 const config = require('./config');
+const { globalMemoryText } = require('./builtin');
 
 const estTokens = (msgs) => Math.ceil(JSON.stringify(msgs).length / 4);
 
 function buildSystem(rt, env) {
-  const mem = config.loadMemory(env.userDir, rt.st.cwd);
-  const lines = [
-    'You are CAELIX, a coding agent running on the user\'s computer. You work inside the project folder using tools.',
+  const chat = rt.kind === 'chat';
+  const mem = chat ? '' : config.loadMemory(env.userDir, rt.st.cwd);
+  const gm = globalMemoryText(env.userDir);
+  const lines = chat ? [
+    'You are CAELIX in Chat mode: a helpful, direct assistant. There is no project folder in this mode and you cannot read or change the user\'s files or run shell commands.',
+    'You can browse the web, keep a checklist, ask the user a question, use saved memory, and create documents (md, txt, html, pdf) with WriteDocument; they are saved in the user\'s CAELIX Chats folder.',
+    'If the user wants code changed in a project, tell them to switch to Code mode and open the folder.',
+    `Date: ${new Date().toISOString().slice(0, 10)}`,
+  ] : [
+    'You are CAELIX in Code mode, a coding agent running on the user\'s computer. You work inside the project folder using tools.',
     'Be direct and brief. Read before you edit. Prefer small exact edits. Run independent tool calls together in one reply.',
     'Never claim something works unless a tool result shows it. When a task needs several steps, keep a checklist with TodoWrite.',
     `Working directory: ${rt.st.cwd}`, `Platform: ${process.platform} (${os.release()})`, `Date: ${new Date().toISOString().slice(0, 10)}`,
     `Permission mode: ${rt.st.mode}. In plan mode you may only read; present a plan with ExitPlanMode.`,
   ];
+  if (rt.team) lines.push('Team mode is on: split independent parts of the work across sub-agents (Agent tool) and combine their reports.');
+  if (gm) lines.push('\nSaved memories (all chats):\n' + gm);
   if (mem) lines.push('\nProject memory:\n' + mem);
+  if (rt.summary) lines.push('\nSummary of the conversation before the last reset:\n' + rt.summary);
   return lines.join('\n');
 }
 
@@ -50,19 +61,31 @@ async function callModel(rt, env, messages, tools, onText, onThinking) {
   return providers.streamChat({ ...args, provider: rt.provider, key: c.key, base: c.base, model: rt.model });
 }
 
+async function summarise(rt, env, msgs) {
+  const transcript = msgs.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content || m.tool_calls || '')}`).join('\n').slice(0, 120000);
+  let summary = '';
+  try { const r = await callModel(rt, env, [{ role: 'system', content: 'Summarise the conversation so far for an assistant that will continue the work. Keep decisions, facts about the user, file paths, open tasks and errors. Be concise but complete.' }, { role: 'user', content: transcript }], null); summary = r.text.trim(); } catch (_) {}
+  return summary || 'Earlier conversation (' + msgs.length + ' messages) was trimmed to save space.';
+}
+// /compact: summarise older messages, keep the last few
 async function compact(rt, env, why) {
   const msgs = rt.messages; if (msgs.length < 8) return false;
-  const keep = msgs.slice(-4); const old = msgs.slice(1, -4);
-  const transcript = old.map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content || m.tool_calls || '')}`).join('\n').slice(0, 60000);
-  let summary;
-  try {
-    const r = await callModel(rt, env, [{ role: 'system', content: 'Summarise the conversation so far for a coding agent that will continue the work. Keep decisions, file paths, open tasks and errors. Be concise.' }, { role: 'user', content: transcript }], null);
-    summary = r.text.trim();
-  } catch (_) { summary = ''; }
-  if (!summary) summary = 'Earlier conversation (' + old.length + ' messages) was trimmed to save space.';
+  const keep = msgs.slice(-4); const old = msgs.slice(1, -4); const summary = await summarise(rt, env, old);
   rt.messages = [msgs[0], { role: 'user', content: 'Summary of the earlier conversation:\n' + summary }, { role: 'assistant', content: 'Understood. Continuing from that summary.' }, ...keep];
-  env.emit({ type: 'compacted', why: why || 'auto', before: msgs.length, after: rt.messages.length });
-  return true;
+  env.emit({ type: 'compacted', why: why || 'compact', before: msgs.length, after: rt.messages.length }); return true;
+}
+// /reset and auto-reset at 80%: summarise everything, drop the history, keep memory + the summary; token count returns to baseline
+async function resetContext(rt, env, why) {
+  const msgs = rt.messages; if (msgs.length < 2) return false;
+  const before = estTokens(msgs); const summary = await summarise(rt, env, msgs.slice(1));
+  rt.summary = (rt.summary ? rt.summary + '\n' : '') + summary; rt.summary = rt.summary.slice(-12000);
+  rt.messages = [{ role: 'system', content: buildSystem(rt, env) }]; rt.checkpoints = rt.checkpoints.map((c) => ({ ...c, msgIndex: 1 }));
+  env.emit({ type: 'reset', why: why || 'manual', before, after: estTokens(rt.messages) }); return true;
+}
+function breakdown(messages) {
+  let sys = 0, msg = 0, tool = 0;
+  for (const m of messages) { const n = Math.ceil(JSON.stringify(m).length / 4); if (m.role === 'system') sys += n; else if (m.role === 'tool') tool += n; else msg += n; }
+  return { system: sys, messages: msg, tools: tool, total: sys + msg + tool, active: messages.length - (messages[0] && messages[0].role === 'system' ? 1 : 0) };
 }
 
 async function loop(rt, env, { messages, tools, depth, readOnly }) {
@@ -70,8 +93,8 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
   for (let iter = 0; iter < 60; iter++) {
     if (env.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     if (depth === 0) {
-      const limit = rt.ctxLimit || 128000;
-      if (estTokens(messages) > limit * 0.8) await compact(rt, env, 'auto');
+      const limit = rt.ctxLimit || 2000000;
+      if (estTokens(messages) > limit * 0.8) await resetContext(rt, env, 'auto');
       messages = rt.messages;
     }
     const msgId = 'm' + Date.now().toString(36) + iter; let started = false;
@@ -79,7 +102,7 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
       (t) => depth === 0 && env.emit({ type: 'thinking', delta: t }));
     if (r.usage) { rt.usage.in += r.usage.in; rt.usage.out += r.usage.out; }
     messages.push({ role: 'assistant', content: r.text || null, ...(r.toolCalls.length ? { tool_calls: r.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.args } })) } : {}) });
-    if (depth === 0) { env.emit({ type: 'text_end', id: msgId }); env.emit({ type: 'context', used: estTokens(messages), limit: rt.ctxLimit || 128000, usage: rt.usage }); }
+    if (depth === 0) { env.emit({ type: 'text_end', id: msgId }); env.emit({ type: 'context', used: estTokens(messages), limit: rt.ctxLimit || 2000000, usage: rt.usage, breakdown: breakdown(messages) }); }
     if (!r.toolCalls.length) { final = r.text; break; }
     // 1) decide permissions sequentially (prompts are shown one at a time)
     const plan = [];
@@ -106,6 +129,7 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
       try {
         if (p.err) { out = p.err; isErr = true; }
         else if (rt.mcp && rt.mcp.route[p.c.name]) { const rr = rt.mcp.route[p.c.name]; out = await rr.server.call(rr.tool, p.input); }
+        else if (rt.kind === 'chat' && !CHAT_TOOLS.includes(p.c.name)) { out = 'Error: this tool is not available in Chat mode.'; isErr = true; }
         else if (IMPL[p.c.name]) { st.signal = env.signal; out = await IMPL[p.c.name](st, p.input); if (/^Error/.test(String(out))) isErr = true; }
         else { out = 'Error: unknown tool ' + p.c.name; isErr = true; }
       } catch (e) { out = 'Error: ' + e.message; isErr = true; }
@@ -128,7 +152,7 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
 async function runTurn(rt, env, userText) {
   const st = rt.st;
   Object.assign(st, {
-    emit: env.emit, ask: env.ask, signal: env.signal, setMode: (m) => { st.mode = m; env.emit({ type: 'mode', mode: m }); },
+    emit: env.emit, ask: env.ask, signal: env.signal, docsDir: env.docsDir, renderDocument: env.renderDocument, setMode: (m) => { st.mode = m; env.emit({ type: 'mode', mode: m }); },
     setCwd: (d) => { st.cwd = d; env.emit({ type: 'cwd', cwd: d }); },
     onBeforeWrite: (f) => { if (!rt.turnSnap.has(f)) rt.turnSnap.set(f, fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null); if (!rt.baseSnap.has(f)) rt.baseSnap.set(f, fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null); },
     changed: (f) => env.emit({ type: 'file_changed', file: f }),
@@ -149,7 +173,7 @@ async function runTurn(rt, env, userText) {
   rt.messages.push({ role: 'user', content: userText + ((ups.outputs || []).length ? '\n\n' + ups.outputs.join('\n') : '') });
   env.emit({ type: 'turn_start', turn: rt.turn });
   try {
-    await loop(rt, env, { messages: rt.messages, tools: toolDefs(rt.mcp && rt.mcp.defs), depth: 0 });
+    await loop(rt, env, { messages: rt.messages, tools: toolDefs(rt.mcp && rt.mcp.defs, { kind: rt.kind }), depth: 0 });
     env.emit({ type: 'turn_end', ok: true });
   } catch (e) {
     if (e.name === 'AbortError') env.emit({ type: 'turn_end', ok: false, aborted: true });
@@ -171,4 +195,4 @@ function rewind(rt, turn, { code, conversation }) {
   return { ok: true, restored: Array.from(new Set(restored)) };
 }
 
-module.exports = { runTurn, compact, rewind, buildSystem, estTokens };
+module.exports = { runTurn, compact, resetContext, breakdown, rewind, buildSystem, estTokens };

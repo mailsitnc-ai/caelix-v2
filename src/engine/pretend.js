@@ -16,7 +16,7 @@ async function streamPretend({ messages, onText, signal }) {
   let out = '';
   const words = (step.say || '').split(/(\s+)/);
   for (const w of words) { if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' }); out += w; onText && onText(w); await sleep(6); }
-  const toolCalls = (step.tools || []).map((t, i) => ({ id: `pre_${stepNo}_${i}`, name: t.name, args: JSON.stringify(t.input || {}) }));
+  const toolCalls = (step.tools || []).map((t, i) => ({ id: `pre_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}_${stepNo}_${i}`, name: t.name, args: JSON.stringify(t.input || {}) }));
   return { text: out, toolCalls, finish: toolCalls.length ? 'tool_calls' : 'stop', usage: { in: Math.ceil(text.length / 4), out: Math.ceil(out.length / 4) } };
 }
 module.exports = { streamPretend };

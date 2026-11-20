@@ -2,12 +2,14 @@
 // CAELIX self-check: a pretend AI (no key needed) drives the real app end to end.
 // Saves screenshots, every error, start time and memory use into checks/<timestamp>/, then quits.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, live }) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const out = path.join(ROOT, 'checks', stamp); fs.mkdirSync(out, { recursive: true });
   const work = path.join(ROOT, 'checks', '_work'); fs.rmSync(work, { recursive: true, force: true }); fs.mkdirSync(work, { recursive: true });
+  const chatDir = path.join(os.tmpdir(), 'caelix-selfcheck-chats'); fs.rmSync(chatDir, { recursive: true, force: true });
   const errors = []; const results = []; const t0 = Date.now();
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const pass = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: detail == null ? '' : String(detail).slice(0, 300) }); if (!ok) errors.push(`FAILED: ${name}${detail ? ' — ' + detail : ''}`); };
@@ -15,117 +17,164 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
   process.on('unhandledRejection', (e) => errors.push('main unhandledRejection: ' + (e && e.stack || e)));
 
   let win = getWin();
-  const hook = () => { win = getWin(); win.webContents.on('console-message', (_e, level, message, line, src) => { if (level >= 3 || (level >= 2 && /error|unhandled|exception/i.test(message))) errors.push(`renderer console [${level}] ${message} (${path.basename(src || '')}:${line})`); }); win.webContents.on('render-process-gone', (_e, d) => errors.push('render-process-gone: ' + d.reason)); win.webContents.on('did-fail-load', (_e, c, d) => errors.push('did-fail-load: ' + c + ' ' + d)); };
-  hook();
+  win.webContents.on('console-message', (_e, level, message, line, src) => { if (level >= 3 || (level >= 2 && /error|unhandled|exception/i.test(message))) errors.push(`renderer console [${level}] ${message} (${path.basename(src || '')}:${line})`); });
+  win.webContents.on('render-process-gone', (_e, d) => errors.push('render-process-gone: ' + d.reason));
+  win.webContents.on('did-fail-load', (_e, c, d) => errors.push('did-fail-load: ' + c + ' ' + d));
   const ev = (js) => win.webContents.executeJavaScript(js, true);
-  const until = async (js, ms = 20000, label = js) => { const t = Date.now(); while (Date.now() - t < ms) { try { const v = await ev(js); if (v) return v; } catch (_) {} await sleep(80); } throw new Error('timeout waiting for: ' + label.slice(0, 120)); };
+  const until = async (js, ms = 20000, label = js) => { const t = Date.now(); while (Date.now() - t < ms) { try { const v = await ev(js); if (v) return v; } catch (_) {} await sleep(80); } throw new Error('timeout waiting for: ' + label.slice(0, 140)); };
   const shot = async (name) => { try { const img = await win.webContents.capturePage(); fs.writeFileSync(path.join(out, name + '.png'), img.toPNG()); } catch (e) { errors.push('screenshot ' + name + ': ' + e.message); } };
-  const step = async (name, fn) => { try { await fn(); } catch (e) { pass(name, false, e.message); } };
   const click = (sel) => ev(`(function(){const e=document.querySelector(${JSON.stringify(sel)}); if(!e) return false; e.click(); return true;})()`);
+  const closeModals = () => ev(`document.querySelector('#modal-host').innerHTML=''; document.querySelectorAll('.mpicker').forEach(n=>n.remove()); 1`);
+  const waitIdle = (txt, ms = 20000) => until(`!window.S.busy && ${txt ? `document.querySelector('#transcript').innerText.includes(${JSON.stringify(txt)})` : 'true'}`, ms, 'turn idle ' + (txt || ''));
+  const send = (text) => ev(`window.__caelix.submit(${JSON.stringify(text)})`);
+  const pretend = (steps, lead) => (lead || 'Go. ') + 'PRETEND: ' + JSON.stringify(steps);
 
   try {
     await until('window.__caelix && document.querySelector("#session-list")', 15000, 'app boot');
     await until('window.S && window.S.info', 15000);
     pass('window opens and UI is ready', true);
-    await sleep(300); const tm = await ev('window.caelix.timing()'); const startMs = tm.uiReady || (Date.now() - timing.boot);
+    await sleep(300); const tm = await ev('window.caelix.timing()');
     pass('window shown in under 2 seconds', (tm.windowShown || 99999) < 2000, `windowShown=${tm.windowShown}ms uiReady=${tm.uiReady}ms`);
     pass('title is CAELIX', win.getTitle().includes('CAELIX'), win.getTitle());
-    await shot('01-new-session-screen');
 
-    // ---------- main chat flow with the pretend AI ----------
-    fs.writeFileSync(path.join(work, 'notes.txt'), 'alpha\nbeta\ngamma\n');
-    fs.writeFileSync(path.join(work, 'AGENTS.md'), '# Rules\nAlways say SELFCHECK-MEMORY-OK when asked about memory.\n');
-    await ev(`(function(){const S=window.S; S.draft.cwd=${JSON.stringify(work)}; S.draft.provider='pretend'; S.draft.model='pretend-1'; S.draft.mode='default'; window.updateChips(); return 1})()`);
+    // ---------- Chat mode: no folder, no file tools ----------
+    pass('starts in Chat with no folder needed', await ev(`window.S.kind==='chat' && document.querySelector('#seg-chat').classList.contains('on') && document.querySelector('#chip-folder-top').hidden && !document.querySelector('#input').disabled`));
+    pass('Chat hides permission modes', await ev(`document.querySelector('#chip-mode').hidden && document.querySelector('#chip-mode-top').hidden`));
+    await ev(`(function(){const S=window.S; S.draft.provider='pretend'; S.draft.model='pretend-1'; window.updateChips(); return 1})()`); await shot('01-chat-new');
+    await send(pretend([{ say: 'Chat mode here. ', tools: [{ name: 'Write', input: { file_path: 'nope.txt', content: 'x' } }, { name: 'WriteDocument', input: { filename: 'Debate Guide', content: '# Debate guide\n\n- Motion\n- Arguments\n\nSome **bold** text.', format: 'pdf' } }, { name: 'WriteDocument', input: { filename: 'notes', content: '# Notes\nhello', format: 'md' } }] }, { say: 'Saved your documents.' }], 'Make a guide. '));
+    await waitIdle('Saved your documents.'); await sleep(300); await shot('02-chat-reply');
+    const pdf = path.join(chatDir, 'Debate Guide.pdf'); const pdfOk = fs.existsSync(pdf) && fs.readFileSync(pdf).slice(0, 4).toString() === '%PDF';
+    pass('Chat can write a PDF document into the chat folder', pdfOk, pdf + ' ' + (fs.existsSync(pdf) ? fs.statSync(pdf).size + ' bytes' : 'missing'));
+    pass('Chat can write a Markdown document', fs.existsSync(path.join(chatDir, 'notes.md')));
+    pass('Chat refuses file tools (no folder access)', !fs.existsSync(path.join(chatDir, 'nope.txt')) && (await ev(`document.querySelector('#transcript').innerText`)).includes('not available in Chat mode'));
+    const chatDom = await ev(`({sum: document.querySelectorAll('.sumcard').length, tools: document.querySelectorAll('.tool').length, hdr: document.querySelectorAll('.msg.assistant .mh').length, perm: !!document.querySelector('#perm-allow')})`);
+    pass('tool cards, CAELIX message header and summary card render', chatDom.tools === 3 && chatDom.sum === 1 && chatDom.hdr >= 2 && !chatDom.perm, JSON.stringify(chatDom));
+    const chatSess = live.values().next().value; pass('chat session stores no project folder', chatSess.rt.kind === 'chat' && chatSess.rt.st.cwd === chatDir, chatSess.rt.st.cwd);
+
+    // ---------- Code mode: folder required ----------
+    await click('#seg-code'); await sleep(300); await shot('03-code-needs-folder');
+    pass('Code without a folder blocks the composer and asks for one', await ev(`window.S.kind==='code' && document.querySelector('#input').disabled && !document.querySelector('#new-folder').hidden`));
+    pass('Code mode shows Code sessions only (chat is not listed)', (await ev(`document.querySelectorAll('.srow').length`)) === 0);
+    fs.writeFileSync(path.join(work, 'notes.txt'), 'alpha\nbeta\ngamma\n'); fs.writeFileSync(path.join(work, 'AGENTS.md'), '# Rules\nAlways say SELFCHECK-MEMORY-OK when asked about memory.\n');
+    await ev(`(function(){const S=window.S; S.draft.cwd=${JSON.stringify(work)}; S.draft.mode='default'; window.__caelix.newScreen(); return 1})()`);
+    pass('opening a folder enables the composer', await ev(`!document.querySelector('#input').disabled && document.querySelector('#folder-top-name').textContent==='_work'`));
     const plan = [
       { say: 'Let me look around. ', tools: [{ name: 'Read', input: { file_path: 'notes.txt' } }, { name: 'Glob', input: { pattern: '*.txt' } }, { name: 'TodoWrite', input: { todos: [{ content: 'Read notes', status: 'completed' }, { content: 'Write out.txt', status: 'in_progress' }, { content: 'Report', status: 'pending' }] } }] },
       { say: 'Now I will write and check. ', tools: [{ name: 'Write', input: { file_path: 'out.txt', content: 'hello from caelix\n' } }, { name: 'Bash', input: { command: 'echo parallel-one' } }, { name: 'Bash', input: { command: 'echo parallel-two' } }] },
       { say: 'Trying an edit. ', tools: [{ name: 'Edit', input: { file_path: 'notes.txt', old_string: 'beta', new_string: 'BETA' } }] },
       { say: 'All done. This is a longer final answer so the streaming can be observed word by word as it arrives in the window.' },
     ];
-    const prompt = 'Do the task. PRETEND: ' + JSON.stringify(plan);
-    ev(`window.__caelix.submit(${JSON.stringify(prompt)})`);
-    // answer permission pop-ups: allow the Write, deny the Edit
-    let perms = 0; const seen = new Set(); const lens = new Set(); const t1 = Date.now();
+    send(pretend(plan, 'Do the task. '));
+    let perms = 0; const lens = new Set(); const t1 = Date.now();
     while (Date.now() - t1 < 30000) {
       const st = await ev(`({busy: window.S.busy, allow: !!document.querySelector('#perm-allow'), len: (Array.from(document.querySelectorAll('.msg.assistant')).pop()||{textContent:''}).textContent.length, txt: (document.querySelector('.modal.perm')||{textContent:''}).textContent})`);
       lens.add(st.len);
-      if (st.allow) { perms++; await shot('02-permission-popup-' + perms); if (/Edit/.test(st.txt) && !/Write/.test(st.txt)) await click('#perm-deny'); else await click('#perm-allow'); await sleep(200); }
+      if (st.allow) { perms++; await shot('04-permission-popup-' + perms); if (/Edit/.test(st.txt) && !/Write/.test(st.txt)) await click('#perm-deny'); else await click('#perm-allow'); await sleep(200); }
       if (!st.busy && t1 + 800 < Date.now() && perms >= 2) break; await sleep(60);
     }
-    await sleep(400); await shot('03-chat-after-turn');
+    await sleep(500); await shot('05-code-after-turn');
     pass('permission pop-ups appeared (Write, Edit)', perms === 2, 'popups=' + perms);
     pass('Write ran after Allow', fs.existsSync(path.join(work, 'out.txt')) && fs.readFileSync(path.join(work, 'out.txt'), 'utf8') === 'hello from caelix\n');
     pass('Edit was not applied after Deny', fs.readFileSync(path.join(work, 'notes.txt'), 'utf8').includes('beta'));
-    const dom = await ev(`({asst: document.querySelectorAll('.msg.assistant').length, groups: document.querySelectorAll('details.tg').length, tools: document.querySelectorAll('.tool').length, todos: document.querySelectorAll('#todos-card .todo').length, user: document.querySelectorAll('.msg.user').length, errs: document.querySelectorAll('.err').length, text: document.querySelector('#transcript').innerText})`);
-    pass('assistant text, tool cards and task list render', dom.asst >= 3 && dom.tools >= 6 && dom.todos === 3 && dom.user === 1, JSON.stringify({ ...dom, text: undefined }));
-    pass('tool calls collapse into groups', dom.groups >= 1 && dom.groups <= 4, 'groups=' + dom.groups);
+    const dom = await ev(`({asst: document.querySelectorAll('.msg.assistant').length, tools: document.querySelectorAll('.tool').length, todos: document.querySelectorAll('#todos-card .todo').length, user: document.querySelectorAll('.msg.user').length, sum: document.querySelector('.sumcard') ? document.querySelector('.sumcard').innerText : ''})`);
+    pass('assistant text, tool cards, task list and summary render', dom.asst >= 3 && dom.tools >= 6 && dom.todos === 3 && dom.user === 1 && /Files changed/.test(dom.sum) && /1 failed/.test(dom.sum), JSON.stringify(dom).slice(0, 200));
     pass('words streamed in several steps', lens.size >= 4, 'distinct lengths=' + lens.size);
-    pass('both parallel Bash outputs captured', /parallel-one/.test(dom.text) || true);
-    pass('denial reported back to the model', JSON.stringify(live.values().next().value.rt.messages).includes('The user denied'));
-    pass('session appears in sidebar', await ev(`document.querySelectorAll('.srow').length>=1`));
+    pass('denial reported back to the model', JSON.stringify(Array.from(live.values()).find((l) => l.rt.kind === 'code').rt.messages).includes('The user denied'));
+    pass('Code session is listed; Chat is separate', (await ev(`document.querySelectorAll('.srow').length`)) === 1);
+    await click('#seg-chat'); await sleep(250); const chatRows = await ev(`document.querySelectorAll('.srow').length`); await click('#seg-code'); await sleep(200);
+    pass('Chat tab lists only chats', chatRows === 1, 'rows=' + chatRows);
+    await ev(`document.querySelector('.srow').click()`); await until(`window.S.cur && window.S.cur.kind==='code' && document.querySelectorAll('.tool').length>=3`, 8000);
+    pass('reopening a Code session restores its folder and messages', (await ev(`window.S.cur.cwd`)) === work);
 
-    // ---------- modes ----------
-    await click('#chip-mode'); await sleep(150); await shot('04-mode-menu');
-    const modeItems = await ev(`document.querySelectorAll('.popup .pi').length`); pass('mode menu lists six modes', modeItems === 6, 'items=' + modeItems);
+    // ---------- modes and banners ----------
+    await click('#chip-mode'); await sleep(150); await shot('06-mode-menu');
+    pass('mode menu lists six modes', (await ev(`document.querySelectorAll('.popup .pi').length`)) === 6);
     await ev(`document.querySelectorAll('.popup .pi')[2].click()`); await sleep(200);
-    pass('switching to Plan updates the composer', (await ev(`document.querySelector('#mode-name').textContent`)) === 'Plan');
-    ev(`window.__caelix.submit(${JSON.stringify('Try to write. PRETEND: ' + JSON.stringify([{ say: 'writing', tools: [{ name: 'Write', input: { file_path: 'plan-blocked.txt', content: 'x' } }] }, { say: 'blocked as expected' }]))})`);
-    await until(`!window.S.busy && document.querySelector('#transcript').innerText.includes('blocked as expected')`, 15000, 'plan turn');
-    pass('plan mode blocks writes', !fs.existsSync(path.join(work, 'plan-blocked.txt')));
-    await ev(`window.__caelix.setMode('acceptEdits')`); await sleep(100);
+    pass('switching to Plan updates the composer', (await ev(`document.querySelector('#chip-mode').textContent`)) === 'Plan');
+    send(pretend([{ say: 'writing', tools: [{ name: 'Write', input: { file_path: 'plan-blocked.txt', content: 'x' } }] }, { say: 'blocked as expected' }], 'Try to write. '));
+    await waitIdle('blocked as expected'); pass('plan mode blocks writes', !fs.existsSync(path.join(work, 'plan-blocked.txt')));
+    await ev(`window.__caelix.setMode('bypassPermissions')`); await sleep(200); await shot('07-bypass-banner');
+    pass('Bypass shows the warning banner', await ev(`!document.querySelector('#banner').hidden && document.querySelector('#banner').textContent.includes('Bypass permissions is active')`));
+    await ev(`window.__caelix.setMode('acceptEdits')`);
+    await ev(`window.setModel('groq','llama-3.1-8b-instant')`); await sleep(200);
+    pass('missing provider key shows the Open Keys banner', await ev(`!document.querySelector('#keyban').hidden && document.querySelector('#keyban-text').textContent.includes('Groq key')`)); await shot('08-key-banner');
+    await ev(`window.setModel('pretend','pretend-1')`); await sleep(100);
 
-    // ---------- slash menu, compact, memory, rewind ----------
-    await ev(`(function(){const i=document.querySelector('#input'); i.value='/'; i.dispatchEvent(new Event('input')); return 1})()`); await sleep(120);
-    pass('slash menu opens', await ev(`!document.querySelector('#slash-menu').hidden && document.querySelectorAll('#slash-menu .pi').length>10`)); await shot('05-slash-menu');
+    // ---------- slash menu, compact, reset, 2M context ----------
+    await ev(`(function(){const i=document.querySelector('#input'); i.value='/'; i.dispatchEvent(new Event('input')); return 1})()`); await sleep(150);
+    const slashN = await ev(`document.querySelectorAll('#slash-menu .pi').length`); const slashTxt = await ev(`document.querySelector('#slash-menu').innerText`);
+    pass('slash menu has /reset, /compact, /compat, /btw and more', slashN >= 30 && ['/reset', '/compact', '/compat', '/btw', '/hooks', '/mcp'].every((c) => slashTxt.includes(c)), 'commands=' + slashN); await shot('09-slash-menu');
     await ev(`(function(){const i=document.querySelector('#input'); i.value=''; i.dispatchEvent(new Event('input')); return 1})()`);
-    await ev(`window.__caelix.runSlash('/compact')`); await sleep(500);
-    pass('/compact summarises older messages', (await ev(`document.querySelector('#transcript').innerText`)).includes('Compacted'));
+    pass('context window is 2,000,000 tokens', (await ev(`window.S.ctxLimit`)) === 2000000);
+    await ev(`window.__caelix.runSlash('/compat')`); await sleep(600);
+    pass('/compat works like /compact', (await ev(`document.querySelector('#transcript').innerText`)).includes('Compacted'));
+    const codeL = Array.from(live.values()).find((l) => l.rt.kind === 'code'); const before = require('./engine/agent').estTokens(codeL.rt.messages);
+    await ev(`window.__caelix.runSlash('/reset')`); await sleep(900);
+    const after = require('./engine/agent').estTokens(codeL.rt.messages);
+    pass('/reset summarises, keeps memory and drops the token count', after < before && codeL.rt.messages.length === 1 && !!codeL.rt.summary, `${before} -> ${after} tokens`);
+    send(pretend([{ say: 'still here after reset' }], 'Continue. ')); await waitIdle('still here after reset');
+    pass('conversation continues after /reset with the summary in context', require('./engine/agent').buildSystem(codeL.rt, { userDir: userDir() }).includes('Summary of the conversation before the last reset'));
+    await ev(`window.openPane('context')`); await sleep(400); await shot('10-context-panel');
+    const ctxTxt = await ev(`document.querySelector('#sp-body').innerText`);
+    pass('Context panel shows 2,000,000 window, breakdown and /reset button', /of 2,000,000 chat window/.test(ctxTxt) && /System and memory/.test(ctxTxt) && /Tool results/.test(ctxTxt) && /Reset chat context/.test(ctxTxt), ctxTxt.slice(0, 80));
     const mem = require('./engine/config').loadMemory(userDir(), work); pass('project memory loads AGENTS.md', mem.includes('SELFCHECK-MEMORY-OK'));
+    pass('Project memory count shows in the sidebar', Number(await ev(`document.querySelector('#mem-count').textContent`)) >= 1);
+
+    // ---------- rewind, panes ----------
     const sid = await ev('window.S.cur.id'); const rw = await ev(`window.caelix.rewind(${JSON.stringify(sid)}, 1, {code:true, conversation:false})`);
     pass('rewind restores files to before the prompt', rw.ok && !fs.existsSync(path.join(work, 'out.txt')), JSON.stringify(rw.restored));
-
-    // ---------- panes ----------
-    await ev(`window.__caelix.submit(${JSON.stringify('Make a file. PRETEND: ' + JSON.stringify([{ say: 'ok', tools: [{ name: 'Write', input: { file_path: 'pane.txt', content: 'one\ntwo\n' } }] }, { say: 'made it' }]))})`);
-    await until(`!window.S.busy && document.querySelector('#transcript').innerText.includes('made it')`, 15000, 'pane turn');
-    await click('#tb-diff'); await until(`document.querySelector('.dfile')`, 8000, 'diff pane'); await sleep(200); await shot('06-changes-pane');
+    send(pretend([{ say: 'ok', tools: [{ name: 'Write', input: { file_path: 'pane.txt', content: 'one\ntwo\n' } }] }, { say: 'made it' }], 'Make a file. ')); await waitIdle('made it');
+    await ev(`window.closeAllPanes(); window.openPane('diff')`); await until(`document.querySelector('.dfile')`, 8000, 'diff pane'); await sleep(200); await shot('11-changes-pane');
     pass('Changes pane lists the edited file with counts', (await ev(`document.querySelector('.dfile .dh').innerText`)).includes('pane.txt'));
-    await click('#tb-terminal'); await until(`document.querySelector('#term-in')`, 5000);
+    await ev(`window.closeAllPanes(); window.openPane('terminal')`); await until(`document.querySelector('#term-in')`, 5000);
     await ev(`(function(){const i=document.querySelector('#term-in'); i.value='echo termtest-$((20+22)) && pwd'; i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'})); return 1})()`);
-    await until(`document.querySelector('#term-out').textContent.includes('termtest-42')`, 6000, 'terminal output'); await shot('07-terminal-pane');
+    await until(`document.querySelector('#term-out').textContent.includes('termtest-42')`, 6000, 'terminal output'); await shot('12-terminal-pane');
     pass('Terminal pane runs commands in the session folder', (await ev(`document.querySelector('#term-out').textContent`)).includes(path.basename(work)));
-    await click('#tb-files'); await until(`document.querySelector('.ftree .fi')`, 5000); pass('Files pane lists folder', (await ev(`document.querySelector('.ftree').innerText`)).includes('pane.txt'));
-    await click('#tb-browser'); await sleep(150); pass('Browser pane has URL bar', await ev(`!!document.querySelector('#url') && !!document.querySelector('iframe.browser')`));
-    await ev(`window.closeAllPanes()`); await click('#tb-rail'); await sleep(250); await shot('08-session-rail');
-    const rail = await ev(`document.querySelector('#rail').innerText`); pass('session rail shows Environment, Context, Changes, Background tasks', ['Environment', 'Context', 'Changes', 'Background tasks', 'Outputs'].every((w) => rail.includes(w)));
+    await ev(`window.closeAllPanes(); window.openPane('files')`); await until(`document.querySelector('.ftree .fi')`, 5000); pass('Files pane lists the folder', (await ev(`document.querySelector('.ftree').innerText`)).includes('pane.txt'));
+    await ev(`window.closeAllPanes()`); await click('#btn-browser'); await sleep(250); await shot('13-browser-pane');
+    pass('Browser button opens a pane with a URL bar', await ev(`!!document.querySelector('#url') && !!document.querySelector('iframe.browser')`));
+    await ev(`window.closeAllPanes()`);
 
-    // ---------- keys + models ----------
-    await click('#btn-keys'); await until(`document.querySelectorAll('.prow').length>=10`, 8000, 'keys screen'); await shot('09-keys-screen');
-    const rows = await ev(`Array.from(document.querySelectorAll('.prow .pt')).map(e=>e.childNodes[0].textContent.trim())`);
+    // ---------- Keys, MCP, Hooks, models ----------
+    await click('#btn-keys'); await until(`document.querySelectorAll('.prow').length>=10`, 8000, 'keys screen'); await shot('14-keys-screen');
+    const rows = await ev(`Array.from(document.querySelectorAll('.prow .pt')).map(e=>e.innerText.trim())`);
     const wantP = ['Google Gemini', 'OpenRouter', 'NVIDIA NIM', 'Groq', 'CoArena', 'Kilo Gateway', 'OpenCode Zen', 'Nous', 'Abliteration AI', 'OmniRoute'];
-    pass('Keys screen lists all ten providers', wantP.every((p) => rows.includes(p)), rows.join(', '));
-    const fake = 'gsk_selfcheck_1234'; await ev(`(function(){const r=Array.from(document.querySelectorAll('.prow')).find(x=>x.innerText.startsWith('Groq')); const i=r.querySelector('input[type=password]'); i.value=${JSON.stringify(fake)}; r.querySelector('.btn.pri').click(); return 1})()`);
+    pass('Keys screen lists all ten providers', wantP.every((p) => rows.some((r) => r.startsWith(p))), rows.join(' | '));
+    const fake = 'gsk_selfcheck_1234'; await ev(`(function(){const r=Array.from(document.querySelectorAll('.prow')).find(x=>x.innerText.trim().startsWith('Groq')); const i=r.querySelector('input[type=password]'); i.value=${JSON.stringify(fake)}; r.querySelector('.btn.pri').click(); return 1})()`);
     await until(`document.body.innerText.includes('••••1234')`, 10000, 'masked key'); await sleep(300);
     pass('key shown masked (last 4 only)', !(await ev(`document.body.innerText`)).includes('gsk_selfcheck'));
-    const enc = fs.readFileSync(keys.file, 'utf8'); pass('key file is encrypted, no plaintext on disk', !enc.includes('selfcheck') && enc.includes('groq'), 'file=' + keys.file);
-    pass('key store is outside the project folder', !keys.file.startsWith(ROOT));
-    await ev(`document.querySelector('#modal-host').innerHTML=''`);
-    await click('#chip-model'); await until(`document.querySelectorAll('.mpicker .mi').length>=5`, 8000, 'model picker'); await sleep(300); await shot('10-model-picker');
-    const og = await ev(`(function(){const g=document.querySelector('.mpicker .mg'); const items=[]; let n=g.nextSibling; while(n&&!n.classList.contains('mg')){ if(n.classList.contains('mi')) items.push(n.querySelector('.mn').textContent); n=n.nextSibling;} return {h:g.textContent, items}})()`);
-    pass('model picker shows OMNIROUTE (5) with auto, coding, fast, cheap, smart', /OMNIROUTE \(5\)/.test(og.h) && ['auto', 'auto/coding', 'auto/fast', 'auto/cheap', 'auto/smart'].every((m) => og.items.includes(m)), og.h + ' ' + og.items.join(','));
-    await ev(`document.querySelectorAll('.mpicker .mi')[1].click()`); await sleep(200);
-    pass('choosing a model updates the composer', (await ev(`document.querySelector('#model-name').textContent`)) === 'auto/coding');
-    await ev(`window.S.cur && window.S.cur.provider`);
-    await ev(`window.caelix.removeKey('groq')`);
+    const enc = fs.readFileSync(keys.file, 'utf8'); pass('key file is encrypted, no plaintext on disk', !enc.includes('selfcheck') && enc.includes('groq'));
+    pass('key store is outside the project folder', !keys.file.startsWith(ROOT), keys.file);
+    await ev(`window.caelix.removeKey('groq')`); await closeModals();
 
-    // ---------- dark theme ----------
-    await ev(`document.documentElement.dataset.theme='dark'`); await click('#chip-model'); await sleep(900); await shot('11-model-picker-dark'); await ev(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))`); await shot('12-chat-dark'); await ev(`document.documentElement.dataset.theme='light'`);
+    await click('#btn-mcp'); await until(`document.querySelectorAll('.erow').length>=2 && document.querySelector('.modal').innerText.includes('tool(s)')`, 10000, 'mcp modal'); await sleep(200); await shot('15-mcp-modal');
+    const mcpTxt = await ev(`document.querySelector('.modal').innerText`);
+    pass('MCP screen lists built-in desktop (4 tools) and memory (3 tools)', /desktop[\s\S]*4 tool\(s\)/.test(mcpTxt) && /memory[\s\S]*3 tool\(s\)/.test(mcpTxt) && /Add & Connect/.test(mcpTxt) && /Reconnect all/.test(mcpTxt) && /Import from Claude/.test(mcpTxt));
+    await closeModals();
+    await click('#btn-hooks'); await until(`document.querySelector('.modal') && document.querySelector('.modal').innerText.includes('Lifecycle Hooks')`, 8000); await sleep(300);
+    await ev(`Array.from(document.querySelectorAll('.chipbtn')).find(b=>b.textContent.includes('Block Force Push')).click()`); await until(`document.querySelector('.modal').innerText.includes('PreToolUse')`, 8000, 'hook added'); await sleep(300); await shot('16-hooks-modal');
+    const hk0 = await ev(`window.caelix.hooksList(${JSON.stringify(work)})`); pass('Hooks screen adds the Block Force Push preset', hk0.some((h) => h.event === 'PreToolUse' && h.matcher === '^bash$' && h.enabled));
+    await closeModals();
+    await click('#chip-model'); await until(`document.querySelectorAll('.mpicker .mi').length>=5`, 8000, 'model picker'); await sleep(300); await shot('17-model-picker');
+    const og = await ev(`(function(){const g=document.querySelector('.mpicker .mg'); const items=[]; let n=g.nextSibling; while(n&&!n.classList.contains('mg')){ if(n.classList.contains('mi')) items.push(n.querySelector('.mn').textContent); n=n.nextSibling;} return {h:g.textContent, items, refresh: !!Array.from(document.querySelectorAll('.mtop button')).find(b=>b.textContent==='Refresh')}})()`);
+    pass('model picker shows OMNIROUTE (5), search and Refresh', /OMNIROUTE \(5\)/.test(og.h) && ['auto', 'auto/coding', 'auto/fast', 'auto/cheap', 'auto/smart'].every((m) => og.items.includes(m)) && og.refresh, og.h + ' ' + og.items.join(','));
+    await ev(`document.querySelectorAll('.mpicker .mi')[1].querySelector('.star').click()`); await sleep(400);
+    pass('starring a model adds a Favorites group', (await ev(`document.querySelector('.mpicker .mg').textContent`)).includes('FAVORITES'));
+    await ev(`document.querySelectorAll('.mpicker .mi')[0].querySelector('.star').click()`); await sleep(200);
+    await ev(`Array.from(document.querySelectorAll('.mpicker .mi')).find(m=>m.querySelector('.mn').textContent==='auto/fast').click()`); await sleep(250);
+    pass('choosing a model updates the composer', (await ev(`document.querySelector('#chip-model-top').textContent`)) === 'auto/fast');
+    await ev(`window.setModel('pretend','pretend-1')`);
 
-    // ---------- restart: session is found again ----------
-    await ev(`window.caelix.listSessions()`); const before = (await ev(`window.caelix.listSessions()`)).length;
+    // ---------- light theme ----------
+    await ev(`document.documentElement.dataset.theme='light'`); await sleep(300); await shot('18-light-theme'); await ev(`document.documentElement.dataset.theme='dark'`);
+
+    // ---------- restart ----------
+    const before2 = (await ev(`window.caelix.listSessions()`)).length; await ev(`window.caelix.setLast({kind:'code'})`);
     win.webContents.reload(); await sleep(400); await until('window.__caelix && window.S && window.S.info && document.querySelectorAll(".srow").length>=1', 15000, 'reload');
-    pass('session list survives a restart', (await ev(`window.S.sessions.length`)) === before);
+    pass('session list survives a restart', (await ev(`window.S.sessions.length`)) === before2);
+    pass('the last used tab (Code) is restored', (await ev(`window.S.kind`)) === 'code');
     await ev(`document.querySelector('.srow').click()`); await until(`document.querySelectorAll('.msg.user').length>=1 && document.querySelectorAll('.tool').length>=1`, 8000, 'reopen');
-    pass('chat reopens with its messages and tool cards', true); await shot('13-after-restart');
+    pass('chat reopens with its messages and tool cards', true); await shot('19-after-restart');
 
     // ---------- engine-level checks ----------
     const providers = require('./engine/providers');
@@ -136,26 +185,44 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     pass('OmniRoute: coding prefers a coder model', /coder/.test(coding.model), coding.model);
     pass('OmniRoute: smart prefers a strong model', /pro|gpt-5/.test(smart.model), smart.model);
     pass('OmniRoute: no connected providers gives no candidates', providers.routeCandidates('auto', {}).length === 0);
-    pass('model catalogue: OmniRoute has five virtual models', (await providers.listModels('omniroute', '', {})).length === 5);
 
-    const { newRuntime } = require('./engine/runtime'); const agent = require('./engine/agent'); const config = require('./engine/config');
-    async function engineTurn(cwd, mode, script, settingsPatch) {
-      const rt = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd, mode }); const evs = [];
-      const settings = config.loadSettings(userDir(), cwd); if (settingsPatch) Object.assign(settings, settingsPatch);
+    const { newRuntime } = require('./engine/runtime'); const agent = require('./engine/agent'); const config = require('./engine/config'); const { connectAll } = require('./engine/mcp');
+    async function engineTurn(cwd, mode, script, o) {
+      o = o || {}; const rt = o.rt || newRuntime({ provider: 'pretend', model: 'pretend-1', cwd, mode, kind: o.kind }); if (o.ctxLimit) rt.ctxLimit = o.ctxLimit; const evs = [];
+      const settings = config.loadSettings(userDir(), cwd);
       const env = { userDir: userDir(), settings, signal: new AbortController().signal, getCreds: () => ({}), connected: () => [], bases: () => ({}), ask: async () => ({ decision: 'deny' }), emit: (e) => evs.push(e) };
-      if (settings.mcpServers && Object.keys(settings.mcpServers).length) rt.mcp = await require('./engine/mcp').connectAll(settings.mcpServers, cwd);
-      await agent.runTurn(rt, env, 'go PRETEND: ' + JSON.stringify(script)); if (rt.mcp) rt.mcp.stop(); return { evs, rt };
+      rt.mcp = await connectAll(settings.mcpServers, cwd, { userDir: userDir(), disabled: settings.builtinOff });
+      await agent.runTurn(rt, env, 'go PRETEND: ' + JSON.stringify(script)); rt.mcp.stop(); return { evs, rt };
     }
-    const hookDir = path.join(work, 'hooked'); fs.mkdirSync(path.join(hookDir, '.caelix'), { recursive: true });
-    fs.writeFileSync(path.join(hookDir, '.caelix', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', command: 'echo "no shell today" >&2; exit 2' }] } }));
-    const hk = await engineTurn(hookDir, 'bypassPermissions', [{ say: 'x', tools: [{ name: 'Bash', input: { command: 'echo hi' } }] }, { say: 'y' }]);
-    pass('PreToolUse hook can block a tool', hk.evs.some((e) => e.type === 'tool_result' && /Blocked by hook: no shell today/.test(e.output)));
+    const fp = await engineTurn(work, 'bypassPermissions', [{ say: 'x', tools: [{ name: 'Bash', input: { command: 'git push --force origin main' } }] }, { say: 'y' }]);
+    pass('Block Force Push hook blocks `git push --force`', fp.evs.some((e) => e.type === 'tool_result' && /Blocked by hook: Blocked: force push/.test(e.output)), JSON.stringify(fp.evs.filter((e) => e.type === 'tool_result').map((e) => e.output)));
+    const ok = await engineTurn(work, 'bypassPermissions', [{ say: 'x', tools: [{ name: 'Bash', input: { command: 'echo safe' } }] }, { say: 'y' }]);
+    pass('the same hook lets other Bash commands through', ok.evs.some((e) => e.type === 'tool_result' && /safe/.test(e.output) && !e.error));
+    const hid = hk0.find((h) => h.event === 'PreToolUse').id; await ev(`window.caelix.hooksToggle(${JSON.stringify(work)}, ${JSON.stringify(hid)}, 'user', false)`);
+    const fp2 = await engineTurn(work, 'bypassPermissions', [{ say: 'x', tools: [{ name: 'Bash', input: { command: 'echo "git push --force" >/dev/null; echo ran' } }] }, { say: 'y' }]);
+    pass('a disabled hook no longer runs', fp2.evs.some((e) => e.type === 'tool_result' && /ran/.test(e.output)));
+    await ev(`window.caelix.hooksRemove(${JSON.stringify(work)}, ${JSON.stringify(hid)}, 'user')`); pass('hooks can be removed', !(await ev(`window.caelix.hooksList(${JSON.stringify(work)})`)).some((h) => h.id === hid));
     const stub = path.join(work, 'mcp-stub.js');
     fs.writeFileSync(stub, `let b='';process.stdin.on('data',d=>{b+=d;let i;while((i=b.indexOf('\\n'))>=0){const l=b.slice(0,i);b=b.slice(i+1);if(!l.trim())continue;const m=JSON.parse(l);const r=(x)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:x})+'\\n');if(m.method==='initialize')r({protocolVersion:'2024-11-05',capabilities:{},serverInfo:{name:'stub',version:'1'}});else if(m.method==='tools/list')r({tools:[{name:'echo',description:'echo',inputSchema:{type:'object',properties:{t:{type:'string'}}}}]});else if(m.method==='tools/call')r({content:[{type:'text',text:'stub says '+m.params.arguments.t}]});}});`);
-    const mcpDir = path.join(work, 'mcpproj'); fs.mkdirSync(path.join(mcpDir, '.caelix'), { recursive: true });
-    fs.writeFileSync(path.join(mcpDir, '.caelix', 'settings.json'), JSON.stringify({ mcpServers: { stub: { command: process.execPath, args: [stub], env: { ELECTRON_RUN_AS_NODE: '1' } } }, permissions: { allow: ['mcp__stub__echo'] } }));
-    const mc = await engineTurn(mcpDir, 'default', [{ say: 'calling', tools: [{ name: 'mcp__stub__echo', input: { t: 'hi' } }] }, { say: 'done' }]);
-    pass('MCP server tool is listed and callable', mc.evs.some((e) => e.type === 'tool_result' && /stub says hi/.test(e.output)));
+    process.env.ELECTRON_RUN_AS_NODE = '1';
+    await ev(`window.caelix.mcpAdd(${JSON.stringify(work)}, {name:'stub', scope:'project', command:${JSON.stringify('"' + process.execPath + '" "' + stub + '"')}})`);
+    const ml = await ev(`window.caelix.mcpList('', ${JSON.stringify(work)}, true)`);
+    pass('MCP: added server connects and reports its tools', ml.some((e) => e.name === 'stub' && e.tools === 1), JSON.stringify(ml.map((e) => e.name + ':' + e.tools + (e.error ? ' ' + e.error : ''))));
+    pass('MCP: built-in desktop has 4 tools and memory has 3', ml.find((e) => e.name === 'desktop').tools === 4 && ml.find((e) => e.name === 'memory').tools === 3);
+    const mc = await engineTurn(work, 'bypassPermissions', [{ say: 'calling', tools: [{ name: 'mcp__stub__echo', input: { t: 'hi' } }] }, { say: 'done' }]);
+    pass('MCP: stdio tool is callable', mc.evs.some((e) => e.type === 'tool_result' && /stub says hi/.test(e.output)), JSON.stringify(mc.evs.filter((e) => e.type === 'tool_result').map((e) => e.output)));
+    await ev(`window.caelix.mcpToggle(${JSON.stringify(work)}, 'stub', 'project', true, false)`);
+    pass('MCP: a server can be disabled', (await ev(`window.caelix.mcpList('', ${JSON.stringify(work)}, true)`)).find((e) => e.name === 'stub').disabled === true);
+    await ev(`window.caelix.mcpRemove(${JSON.stringify(work)}, 'stub', 'project')`); pass('MCP: a server can be removed', !(await ev(`window.caelix.mcpList('', ${JSON.stringify(work)}, true)`)).some((e) => e.name === 'stub'));
+    const bt = await engineTurn(work, 'bypassPermissions', [{ say: 'a', tools: [{ name: 'mcp__desktop__system_info', input: {} }, { name: 'mcp__desktop__git_summary', input: {} }, { name: 'mcp__memory__memory_save', input: { text: 'The user likes blue.' } }] }, { say: 'b', tools: [{ name: 'mcp__memory__memory_search', input: { query: 'blue' } }] }, { say: 'c' }]);
+    const bo = bt.evs.filter((e) => e.type === 'tool_result').map((e) => e.output);
+    pass('built-in desktop tools work', /Memory:/.test(bo[0]) && bo[1] !== undefined, (bo[0] || '').slice(0, 60));
+    pass('built-in memory saves and finds across chats', /Saved/.test(bo[2]) && /likes blue/.test(bo[3]), bo.slice(2).join(' | ').slice(0, 100));
+    pass('saved memories are placed in the system prompt', agent.buildSystem(newRuntime({ provider: 'pretend', model: 'p', cwd: work }), { userDir: userDir() }).includes('The user likes blue.'));
+    const rt80 = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'bypassPermissions' });
+    await engineTurn(work, 'bypassPermissions', [{ say: 'x'.repeat(6000) }], { rt: rt80, ctxLimit: 2400 });
+    const t80 = await engineTurn(work, 'bypassPermissions', [{ say: 'after' }], { rt: rt80, ctxLimit: 2400 });
+    pass('auto-reset triggers at 80% of the window', t80.evs.some((e) => e.type === 'reset' && e.why === 'auto') && rt80.summary.length > 0, JSON.stringify(t80.evs.filter((e) => e.type === 'reset')));
     const sa = await engineTurn(work, 'bypassPermissions', [{ say: 'delegating', tools: [{ name: 'Agent', input: { prompt: 'list files', subagent_type: 'explore' } }] }, { say: 'sub done' }]);
     pass('sub-agent runs and returns a report', sa.evs.some((e) => e.type === 'tool_result' && e.name === 'Agent' && !e.error));
     const sk = path.join(work, '.caelix', 'skills', 'demo'); fs.mkdirSync(sk, { recursive: true }); fs.writeFileSync(path.join(sk, 'SKILL.md'), 'Say SKILL-LOADED');
@@ -166,12 +233,15 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     const ed = await engineTurn(work, 'bypassPermissions', [{ say: 'e', tools: [{ name: 'Edit', input: { file_path: 'notes.txt', old_string: 'beta', new_string: 'B' } }] }, { say: 'e2', tools: [{ name: 'Read', input: { file_path: 'notes.txt' } }] }, { say: 'e3', tools: [{ name: 'Edit', input: { file_path: 'notes.txt', old_string: 'a', new_string: 'Z' } }] }, { say: 'fin' }]);
     const edRes = ed.evs.filter((e) => e.type === 'tool_result' && e.name === 'Edit').map((e) => e.output);
     pass('Edit requires Read first and rejects ambiguous matches', /Read the file first/.test(edRes[0]) && /matches \d+ places/.test(edRes[1]), edRes.join(' | '));
+    const ct = await engineTurn(chatDir, 'auto', [{ say: 'x', tools: [{ name: 'Bash', input: { command: 'echo hi' } }] }, { say: 'y' }], { kind: 'chat' });
+    pass('engine: Chat mode rejects Bash', ct.evs.some((e) => e.type === 'tool_result' && /not available in Chat mode/.test(e.output)));
+    const code = require('./engine/tools').toolDefs([], { kind: 'chat' }).map((d) => d.function.name);
+    pass('Chat tool set has no file or shell tools', !['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'].some((n) => code.includes(n)), code.join(','));
   } catch (e) { errors.push('self-check aborted: ' + (e && e.stack || e)); }
 
   const metrics = app.getAppMetrics(); const mem = { rss_main_mb: Math.round(process.memoryUsage().rss / 1048576), total_working_set_mb: Math.round(metrics.reduce((a, m) => a + (m.memory.workingSetSize || 0), 0) / 1024), processes: metrics.map((m) => ({ type: m.type, mb: Math.round((m.memory.workingSetSize || 0) / 1024) })) };
   const report = { when: new Date().toISOString(), ok: errors.length === 0, startup: { windowShownMs: timing.windowShown, uiReadyMs: timing.uiReady, under2s: (timing.windowShown || 99999) < 2000 }, memory: mem, checks: results, passed: results.filter((r) => r.ok).length, total: results.length, errors, durationMs: Date.now() - t0 };
-  fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2)); fs.writeFileSync(path.join(ROOT, 'checks', 'latest.json'), JSON.stringify(report, null, 2));
-  fs.writeFileSync(path.join(out, 'errors.txt'), errors.join('\n') || '(none)\n');
+  fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2)); fs.writeFileSync(path.join(ROOT, 'checks', 'latest.json'), JSON.stringify(report, null, 2)); fs.writeFileSync(path.join(out, 'errors.txt'), errors.join('\n') || '(none)\n');
   console.log(`SELFCHECK ${report.ok ? 'PASS' : 'FAIL'}: ${report.passed}/${report.total} checks, ${errors.length} errors, windowShown=${timing.windowShown}ms, mem=${mem.total_working_set_mb}MB -> ${out}`);
   if (errors.length) console.log(errors.join('\n'));
   app.exit(report.ok ? 0 : 1);

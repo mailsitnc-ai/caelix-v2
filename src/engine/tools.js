@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', '.DS_Store']);
 const MUTATING = new Set(['Write', 'Edit', 'NotebookEdit', 'Bash']);
-const READ_ONLY = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'Skill', 'AskUserQuestion', 'TaskStop', 'EnterPlanMode', 'ExitPlanMode']);
+const READ_ONLY = new Set(['WriteDocument', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'Skill', 'AskUserQuestion', 'TaskStop', 'EnterPlanMode', 'ExitPlanMode']);
 
 const def = (name, description, properties, required) => ({
   type: 'function', function: { name, description, parameters: { type: 'object', properties, required: required || [] } },
@@ -28,6 +28,7 @@ const DEFS = [
   def('EnterPlanMode', 'Switch to plan mode: explore read-only and propose a plan.', {}),
   def('ExitPlanMode', 'Present the plan for approval and leave plan mode.', { plan: { type: 'string' } }, ['plan']),
   def('Agent', 'Run a sub-agent with its own context. subagent_type: explore (read-only) or general.', { description: { type: 'string' }, prompt: { type: 'string' }, subagent_type: { type: 'string' } }, ['prompt']),
+  def('WriteDocument', 'Create a document for the user in their CAELIX Chats folder. format: md, txt, html or pdf. Returns the saved path.', { filename: { type: 'string' }, content: { type: 'string', description: 'Markdown (for pdf/html/md) or plain text' }, format: { type: 'string', enum: ['md', 'txt', 'html', 'pdf'] } }, ['filename', 'content']),
   def('Skill', 'Load a skill by name from .caelix/skills/<name>/SKILL.md.', { name: { type: 'string' } }, ['name']),
 ];
 
@@ -188,6 +189,12 @@ const IMPL = {
     if (ans === 'approve') { ctx.setMode('default'); return 'Plan approved. Plan mode is off; proceed.'; }
     return 'Plan not approved: ' + ans;
   },
+  async WriteDocument(ctx, a) {
+    const fmt = (a.format || (a.filename.split('.').pop() || 'md')).toLowerCase(); const base = a.filename.replace(/[\\/:*?"<>|]/g, '_').replace(/\.[A-Za-z0-9]+$/, '') || 'document';
+    if (!ctx.docsDir) return 'Error: documents folder is not configured.'; fs.mkdirSync(ctx.docsDir, { recursive: true });
+    if (fmt === 'pdf' || fmt === 'html') { if (!ctx.renderDocument) return 'Error: PDF export is unavailable here.'; const f = await ctx.renderDocument(path.join(ctx.docsDir, base + '.' + fmt), a.content, fmt); ctx.changed && ctx.changed(f); return `Saved ${f} (${fs.statSync(f).size} bytes)`; }
+    const f = path.join(ctx.docsDir, base + '.' + (fmt === 'txt' ? 'txt' : 'md')); fs.writeFileSync(f, a.content); ctx.changed && ctx.changed(f); return `Saved ${f} (${a.content.length} characters)`;
+  },
   async Agent(ctx, a) { if (!ctx.runSubagent) return 'Sub-agents unavailable.'; return ctx.runSubagent(a); },
   async Skill(ctx, a) {
     const dirs = [path.join(ctx.cwd, '.caelix', 'skills'), path.join(os.homedir(), '.caelix', 'skills')];
@@ -196,8 +203,11 @@ const IMPL = {
   },
 };
 
-function toolDefs(extra, { readOnly } = {}) {
-  const base = readOnly ? DEFS.filter((d) => ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash'].includes(d.function.name)) : DEFS;
+const CHAT_TOOLS = ['WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'WriteDocument', 'Skill', 'Agent'];
+function toolDefs(extra, { readOnly, kind } = {}) {
+  let base = DEFS;
+  if (kind === 'chat') base = DEFS.filter((d) => CHAT_TOOLS.includes(d.function.name));
+  else if (readOnly) base = DEFS.filter((d) => ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash'].includes(d.function.name));
   return base.concat(extra || []);
 }
-module.exports = { DEFS, IMPL, MUTATING, READ_ONLY, toolDefs, tasks, resolveP };
+module.exports = { DEFS, IMPL, MUTATING, READ_ONLY, CHAT_TOOLS, toolDefs, tasks, resolveP };

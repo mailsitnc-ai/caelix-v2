@@ -28,5 +28,5 @@
     }
     flush(); return out.join('');
   }
-  window.md = { render, esc };
+  const api = { render, esc }; if (typeof window !== 'undefined') window.md = api; if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })();
