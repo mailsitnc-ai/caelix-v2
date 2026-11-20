@@ -1,0 +1,19 @@
+{
+  "name": "caelix",
+  "productName": "CAELIX",
+  "version": "2.0.0",
+  "description": "CAELIX - a desktop coding agent",
+  "main": "main.js",
+  "bin": {
+    "caelix": "bin/caelix.js"
+  },
+  "scripts": {
+    "start": "electron .",
+    "selfcheck": "electron . --self-check"
+  },
+  "license": "MIT",
+  "private": true,
+  "devDependencies": {
+    "electron": "^45.4.1"
+  }
+}
