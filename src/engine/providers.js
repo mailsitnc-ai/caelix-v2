@@ -64,7 +64,7 @@ async function listModels(providerId, key, overrides, { force } = {}) {
       free: m.pricing ? (Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0) : /:free$/.test(m.id),
     }));
   }
-  if (p.id === 'nvidia') models = models.filter((m) => !RE.bad.test(m.id)); // NIM lists embedding / safety / vision-only functions that cannot chat
+  if (p.id === 'nvidia') models = models.filter((m) => !RE.nochat.test(m.id)); // NIM lists embedding / safety / vision-only functions that cannot chat
   models.sort((a, b) => a.id.localeCompare(b.id));
   modelCache.set(providerId, { at: Date.now(), models });
   return models;
@@ -147,10 +147,14 @@ const RE = {
   coding: /coder|code|qwen3?-?.*(480|235|32)|deepseek|gpt-oss|kimi|glm|minimax|gemini.*pro|devstral|codestral/i,
   fast: /instant|flash|lite|mini|small|8b|haiku|turbo|nano/i,
   smart: /pro|opus|sonnet|405b|r1|gpt-5|o3|large|ultra|thinking|reason|480b|235b|70b|120b/i,
-  bad: /cosmos|reason2|nemoguard|content-safety|topic-control|retriev|reward|riva|parakeet|canary|nv-embed|neva|paligemma|kosmos|fuyu|deplot|vila|nvclip|clip|embed|rerank|whisper|tts|image|vision-only|guard|moderation|safety|audio|speech|diffusion|flux|sdxl|clip|ocr|parse/i,
+  // models that can never chat (hidden from pickers and routing)
+  nochat: /nemoguard|content-safety|topic-control|retriev|reward|riva|parakeet|canary|nv-embed|nvclip|embed|rerank|\bclip\b|deplot/i,
+  // vision / niche models: shown in the picker, but the automatic router never picks them
+  vision: /cosmos|reason2|neva|paligemma|kosmos|fuyu|vila|-vl\b|vision/i,
+  bad: /embed|rerank|whisper|tts|image|vision-only|guard|moderation|safety|audio|speech|diffusion|flux|sdxl|clip|ocr|parse/i,
 };
 function score(obj, m) {
-  if (RE.bad.test(m.id)) return -1;
+  if (RE.bad.test(m.id) || RE.nochat.test(m.id) || RE.vision.test(m.id)) return -1;
   let s = 1;
   if (obj === 'coding' && RE.coding.test(m.id)) s += 5 + (/coder|codestral|devstral/i.test(m.id) ? 2 : 0);
   if (obj === 'fast' && RE.fast.test(m.id)) s += 5;
