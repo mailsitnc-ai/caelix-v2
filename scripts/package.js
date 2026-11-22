@@ -8,13 +8,14 @@ const os = require('os');
 const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const DIST = path.join(ROOT, 'dist'); const APP = path.join(DIST, 'CAELIX.app');
+const arg = (n, d) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : d; };
+const DIST = path.join(ROOT, 'dist'); const APP = path.resolve(arg('--out', path.join(DIST, 'CAELIX.app')));
 const run = (cmd, args, opts) => execFileSync(cmd, args, { stdio: 'pipe', ...opts }).toString();
 const pb = (plist, cmd) => { try { run('/usr/libexec/PlistBuddy', ['-c', cmd, plist]); } catch (_) {} };
 
-const src = path.join(ROOT, 'node_modules', 'electron', 'dist', 'Electron.app');
+const src = path.resolve(arg('--electron-app', path.join(ROOT, 'node_modules', 'electron', 'dist', 'Electron.app')));
 if (!fs.existsSync(src)) { console.error('Electron.app not found; run npm install first'); process.exit(1); }
-fs.rmSync(APP, { recursive: true, force: true }); fs.mkdirSync(DIST, { recursive: true });
+fs.rmSync(APP, { recursive: true, force: true }); fs.mkdirSync(path.dirname(APP), { recursive: true });
 run('ditto', [src, APP]);
 
 const macos = path.join(APP, 'Contents', 'MacOS'); fs.renameSync(path.join(macos, 'Electron'), path.join(macos, 'CAELIX'));
@@ -27,8 +28,10 @@ fs.rmSync(path.join(res, 'electron.icns'), { force: true }); fs.rmSync(path.join
 fs.copyFileSync(path.join(ROOT, 'assets', 'icons', 'icon.icns'), path.join(res, 'icon.icns'));
 
 const appDir = path.join(res, 'app'); fs.mkdirSync(path.join(appDir, 'assets', 'icons'), { recursive: true });
-for (const f of ['main.js', 'preload.js']) fs.copyFileSync(path.join(ROOT, f), path.join(appDir, f));
+for (const f of ['boot.js', 'main.js', 'preload.js']) fs.copyFileSync(path.join(ROOT, f), path.join(appDir, f));
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')); delete pkg.devDependencies; delete pkg.scripts; fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify(pkg, null, 2));
+// which commit this build is made from (the updater compares it with GitHub)
+try { const sha = run('git', ['rev-parse', 'HEAD'], { cwd: ROOT }).trim(); const ct = run('git', ['show', '-s', '--format=%cI', 'HEAD'], { cwd: ROOT }).trim(); fs.writeFileSync(path.join(appDir, 'build-info.json'), JSON.stringify({ sha, commitTime: ct, builtAt: new Date().toISOString() }, null, 2)); } catch (e) { console.error('warning: no git info, updates will treat this build as a development build'); }
 for (const d of ['src', 'renderer', 'bin']) run('cp', ['-R', path.join(ROOT, d), path.join(appDir, d)]);
 for (const f of fs.readdirSync(path.join(ROOT, 'assets', 'icons'))) { const sp = path.join(ROOT, 'assets', 'icons', f); if (fs.statSync(sp).isFile()) fs.copyFileSync(sp, path.join(appDir, 'assets', 'icons', f)); }
 // fail the build if the interface references a file that is not in the bundle
@@ -43,7 +46,7 @@ for (const page of ['renderer/index.html']) {
 run('codesign', ['--force', '--deep', '--sign', '-', APP]);
 console.log('built', APP);
 
-if (process.argv.includes('--install')) {
+if (process.argv.includes('--install')) {  // (only for the machine you build on)
   let dest = '/Applications/CAELIX.app';
   try { fs.rmSync(dest, { recursive: true, force: true }); run('ditto', [APP, dest]); }
   catch (e) { dest = path.join(os.homedir(), 'Applications', 'CAELIX.app'); fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.rmSync(dest, { recursive: true, force: true }); run('ditto', [APP, dest]); }
