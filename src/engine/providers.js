@@ -64,6 +64,7 @@ async function listModels(providerId, key, overrides, { force } = {}) {
       free: m.pricing ? (Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0) : (/:free$/.test(m.id)),
     }));
   }
+  archiveClaude(providerId, models); models = models.filter((m) => !isClaudeArchived(m.id));
   if (p.id === 'nvidia') models = models.filter((m) => !RE.nochat.test(m.id)); // NIM lists embedding / safety / vision-only functions that cannot chat
   models.sort((a, b) => a.id.localeCompare(b.id));
   modelCache.set(providerId, { at: Date.now(), models });
@@ -144,7 +145,20 @@ let archive = {}; let archiveFile = null; // { 'provider/model': { provider, id,
 function setArchiveFile(f) { archiveFile = f; try { archive = JSON.parse(require('fs').readFileSync(f, 'utf8')) || {}; } catch (_) { archive = {}; } }
 function saveArchive() { if (archiveFile) try { require('fs').writeFileSync(archiveFile, JSON.stringify(archive, null, 1)); } catch (_) {} }
 const getArchive = () => archive;
-const isArchived = (p, m) => !!archive[hkey(p, m)];
+// Claude models are archived for now (none of them work on this account). They are recorded in the
+// archive so the pickers list them under ARCHIVED, and never offered or routed to. CAELIX_SHOW_CLAUDE=1 restores them.
+const SHOW_CLAUDE = process.env.CAELIX_SHOW_CLAUDE === '1';
+const isClaudeArchived = (m) => !SHOW_CLAUDE && /claude/i.test(String(m || ''));
+function archiveClaude(providerId, models) {
+  let changed = false;
+  for (const m of models) {
+    if (!isClaudeArchived(m.id) || archive[hkey(providerId, m.id)]) continue;
+    archive[hkey(providerId, m.id)] = { provider: providerId, id: m.id, status: 0, verdict: 'Claude models are archived', detail: 'Turned off for now. Set CAELIX_SHOW_CLAUDE=1 to bring them back.', at: Date.now() };
+    changed = true;
+  }
+  if (changed) saveArchive();
+}
+const isArchived = (p, m) => !!archive[hkey(p, m)] || isClaudeArchived(m);
 function unarchive(p, m) { if (archive[hkey(p, m)]) { delete archive[hkey(p, m)]; saveArchive(); } }
 function markOk(p, m) { unarchive(p, m); if (health.delete(hkey(p, m))) saveHealth(); }
 
@@ -207,4 +221,4 @@ function routeCandidates(objective, byProvider) {
   return list.sort((a, b) => b.s - a.s);
 }
 
-module.exports = { setArchiveFile, getArchive, isArchived, unarchive, probeModels, setHealthFile, isBenched, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };
+module.exports = { isClaudeArchived, setArchiveFile, getArchive, isArchived, unarchive, probeModels, setHealthFile, isBenched, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };

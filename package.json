@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "electron .",
-    "selfcheck": "electron . --self-check"
+    "selfcheck": "electron . --self-check",
+    "test:routing": "node scripts/verify-routing.js"
   },
   "license": "MIT",
   "private": true,

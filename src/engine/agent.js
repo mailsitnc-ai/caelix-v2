@@ -44,31 +44,50 @@ function buildSystem(rt, env) {
   return lines.join('\n');
 }
 
+// OmniRoute order: whichever objective was chosen, a failure rolls on to the next one (wrapping around) until a model answers.
+const OMNI_CHAIN = ['auto', 'auto/coding', 'auto/smart', 'auto/fast', 'auto/cheap'];
+function omniChain(first) { const at = OMNI_CHAIN.indexOf(first); return at < 0 ? [first, ...OMNI_CHAIN] : [first, ...OMNI_CHAIN.slice(at + 1), ...OMNI_CHAIN.slice(0, at)]; }
+
+async function routeAcross(objective, env, args, onText) {
+  const by = {};
+  await Promise.all(env.connected().map(async (pid) => { try { by[pid] = await providers.listModels(pid, env.getCreds(pid).key, env.bases()); } catch (_) {} }));
+  let lastErr; let attempts = 0; const tried = new Set();
+  for (const obj of omniChain(objective)) {
+    const cands = providers.routeCandidates(obj, by);
+    const sk = providers.sticky.get(obj); if (sk) { const i = cands.findIndex((x) => x.provider === sk.provider && x.model === sk.model); if (i > 0) cands.unshift(...cands.splice(i, 1)); }
+    for (const cand of cands.slice(0, 8)) {
+      const key = cand.provider + '/' + cand.model; if (tried.has(key)) continue; tried.add(key);
+      if (++attempts > 16) break;
+      const cr = env.getCreds(cand.provider);
+      env.emit({ type: 'route', provider: cand.provider, model: cand.model });
+      let started = false;
+      try {
+        const out = await providers.streamChat({ ...args, onText: (t) => { started = true; onText && onText(t); }, provider: cand.provider, key: cr.key, base: cr.base, model: cand.model });
+        providers.markOk(cand.provider, cand.model); providers.sticky.set(obj, { provider: cand.provider, model: cand.model }); return out;
+      } catch (e) { if (e.name === 'AbortError' || started) throw e; lastErr = e; providers.markFailed(cand.provider, cand.model, e); env.emit({ type: 'route_fail', provider: cand.provider, model: cand.model, error: String(e.message).slice(0, 160) }); }
+    }
+  }
+  if (!attempts) throw new Error('OmniRoute has no connected providers yet. Add a key on the Keys screen.');
+  throw lastErr || new Error('OmniRoute failed');
+}
+
 async function callModel(rt, env, messages, tools, onText, onThinking) {
   messages = prepareMessages(messages);
   const args = { messages, tools, signal: env.signal, onText, onThinking, effort: rt.effort };
   if (rt.provider === 'pretend') return streamPretend({ messages, onText, signal: env.signal });
+  // A chat still set to an archived (Claude) model is routed like OmniRoute's coding objective instead of failing.
+  if (rt.provider !== 'omniroute' && providers.isClaudeArchived(rt.model)) {
+    env.emit({ type: 'route_note', message: 'Claude models are archived; routing this turn automatically.' });
+    return routeAcross('auto/coding', env, args, onText);
+  }
   if (rt.provider === 'omniroute') {
     const c = env.getCreds('omniroute');
-    if (c.base) return providers.streamChat({ ...args, provider: 'omniroute', key: c.key, base: c.base, model: rt.model });
-    const connected = env.connected();
-    const by = {};
-    await Promise.all(connected.map(async (pid) => { try { by[pid] = await providers.listModels(pid, env.getCreds(pid).key, env.bases()); } catch (_) {} }));
-    const cands = providers.routeCandidates(rt.model, by);
-    if (!cands.length) throw new Error('OmniRoute has no connected providers yet. Add a key on the Keys screen.');
-    let lastErr;
-    const sk = providers.sticky.get(rt.model);
-    if (sk) { const i = cands.findIndex((x) => x.provider === sk.provider && x.model === sk.model); if (i > 0) cands.unshift(...cands.splice(i, 1)); }
-    for (const cand of cands.slice(0, 8)) {
-      const cr = env.getCreds(cand.provider);
-      env.emit({ type: 'route', provider: cand.provider, model: cand.model });
-      try {
-        let started = false;
-        const out = await providers.streamChat({ ...args, onText: (t) => { started = true; onText && onText(t); }, provider: cand.provider, key: cr.key, base: cr.base, model: cand.model });
-        providers.markOk(cand.provider, cand.model); providers.sticky.set(rt.model, { provider: cand.provider, model: cand.model }); return out;
-      } catch (e) { if (e.name === 'AbortError' || started) throw e; lastErr = e; providers.markFailed(cand.provider, cand.model, e); env.emit({ type: 'route_fail', provider: cand.provider, model: cand.model, error: String(e.message).slice(0, 160) }); }
+    if (c.base) { // a self-hosted OmniRoute: use it first, and keep going through the connected providers if it fails
+      let started = false;
+      try { return await providers.streamChat({ ...args, onText: (t) => { started = true; onText && onText(t); }, provider: 'omniroute', key: c.key, base: c.base, model: rt.model }); }
+      catch (e) { if (e.name === 'AbortError' || started || !env.connected().length) throw e; env.emit({ type: 'route_fail', provider: 'omniroute', model: rt.model, error: String(e.message).slice(0, 160) }); }
     }
-    throw lastErr || new Error('OmniRoute failed');
+    return routeAcross(rt.model, env, args, onText);
   }
   const p = providers.byId(rt.provider); const c = env.getCreds(rt.provider);
   if (!c.key && !p.keyOptional) throw new Error(`No key for ${p.name}. Open Keys and paste one.`);
@@ -263,4 +282,4 @@ function rewind(rt, turn, { code, conversation }) {
   return { ok: true, restored: Array.from(new Set(restored)) };
 }
 
-module.exports = { makeTitle, fallbackTitle, textOf, runTurn, compact, resetContext, breakdown, rewind, buildSystem, estTokens };
+module.exports = { callModel, routeAcross, omniChain, makeTitle, fallbackTitle, textOf, runTurn, compact, resetContext, breakdown, rewind, buildSystem, estTokens };
