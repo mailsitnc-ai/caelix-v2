@@ -200,6 +200,28 @@
     const b = el('div'); b.innerHTML = rows.map(([k, d]) => `<div class="pi"><span class="kbd">${k}</span><span class="d">${d}</span></div>`).join(''); dialog('Keyboard shortcuts', 'Type / in the composer for every command.', b, []);
   }
 
+  async function updates() {
+    const body = el('div', 'updbox'); const out = el('div', 'msg2', 'Press "Check for updates" to look for a newer CAELIX.');
+    const row = (a, b) => `<div class="row"><span>${a}</span><span>${esc(b)}</span></div>`;
+    let go = null;
+    async function show(r) {
+      const c = r.current || {}; const l = r.latest || {};
+      body.innerHTML = row('Installed', `${c.version || ''} · ${c.short || 'development build'}`) + row('Newest on GitHub', `${l.short || '?'} · ${(l.date || '').slice(0, 10)}`) + row('Latest change', l.message || '—') + row('Source', 'github.com/' + r.repo);
+      body.appendChild(out); if (r.available) { out.textContent = 'A newer version is available. Updating downloads only the app code, keeps your chats, keys and settings, and restarts CAELIX.'; go.disabled = false; go.style.display = ''; } else { out.textContent = r.devBuild ? 'This is a development build, so it does not self-update.' : 'You have the newest version.'; go.style.display = 'none'; }
+      setBadge(!!r.available);
+    }
+    const chk = btn('Check for updates', '', async () => { chk.disabled = true; out.textContent = 'Checking GitHub…'; try { await show(await api.updCheck()); } catch (e) { out.textContent = e.message; } chk.disabled = false; });
+    go = btn('Update now', 'pri', async () => {
+      go.disabled = true; chk.disabled = true; out.textContent = 'Downloading the update…';
+      try { const r = await api.updApply(false); if (r.updated) out.textContent = 'Updated to ' + r.latest.short + '. Restarting CAELIX…'; else { out.textContent = r.message; chk.disabled = false; } }
+      catch (e) { out.textContent = e.message; chk.disabled = false; go.disabled = false; }
+    }); go.style.display = 'none';
+    body.appendChild(out); dialog('Updates', 'Get the newest CAELIX without downloading the installer again.', body, [btn('Close', '', () => (host().innerHTML = '')), chk, go], { width: '560px' });
+    api.updInfo().then((c) => { body.insertAdjacentHTML('afterbegin', row('Installed', `${c.version || ''} · ${c.sha ? c.sha.slice(0, 7) : 'development build'}`)); }).catch(() => {});
+    api.onUpdateProgress && api.onUpdateProgress((d) => { out.textContent = d.step; });
+  }
+  function setBadge(has) { const b = document.querySelector('#btn-update'); if (!b) return; b.classList.toggle('has', has); b.querySelector('.dotbadge').hidden = !has; b.title = has ? 'A new version is available: click to update' : 'Check for updates'; }
+  window.setUpdateBadge = setBadge;
   function askText(title, initial, sub) {
     return new Promise((resolve) => {
       const body = el('div'); const inp = document.createElement('input'); inp.type = 'text'; inp.value = initial || ''; inp.maxLength = 120; inp.style.cssText = 'width:100%;padding:11px 13px;border-radius:12px;border:1px solid var(--border2);background:var(--glass3);color:inherit;font:inherit;outline:none';
@@ -226,5 +248,5 @@
     }
     draw(); dialog('Team mode', 'Pick one model to write code and a different one to review it.', body, [btn('Cancel', '', () => (host().innerHTML = '')), btn('Save', 'pri', async () => { if (await save()) host().innerHTML = ''; })], { width: '620px' });
   }
-  window.Modals = { askText, team, keys, modelPicker, mcp, hooks, memory, system, permission, rewind, side, sideAppend, settings, help };
+  window.Modals = { updates, askText, team, keys, modelPicker, mcp, hooks, memory, system, permission, rewind, side, sideAppend, settings, help };
 })();

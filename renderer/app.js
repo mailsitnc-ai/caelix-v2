@@ -371,6 +371,9 @@
   $('#btn-browser').onclick = () => openPane('browser'); $('#btn-panel').onclick = () => (S.pane ? closeAllPanes() : openPane(S.lastPane || 'context'));
   $('#btn-keys').onclick = () => window.lazy('modals').then(() => window.Modals.keys()); $('#btn-mcp').onclick = () => window.lazy('modals').then(() => window.Modals.mcp()); $('#btn-hooks').onclick = () => window.lazy('modals').then(() => window.Modals.hooks());
   $('#btn-theme').onclick = () => window.toggleTheme(); $('#tb-sidebar').onclick = () => $('#sidebar').classList.toggle('collapsed');
+  $('#btn-update').onclick = () => window.lazy('modals').then(() => window.Modals.updates());
+  api.onOpenUpdates && api.onOpenUpdates(() => $('#btn-update').click());
+  api.onUpdateStatus && api.onUpdateStatus((r) => { $('#btn-update').classList.add('has'); $('#btn-update').querySelector('.dotbadge').hidden = false; $('#btn-update').title = 'A new version is available: click to update'; toast('A new CAELIX version is available. Click the ⟳ button to update.', 7000); });
   $('#title-btn').onclick = async () => { if (!S.cur) { toast('Send a first message, then you can rename the chat'); return; } await window.lazy('modals'); const t = await window.Modals.askText('Rename chat', S.cur.title); if (t) runSlash('/rename ' + t); };
   async function refreshChanges() { if (!S.cur || !isCode()) { S.changes = []; return; } try { S.changes = await api.diff(S.cur.id); } catch (_) { S.changes = []; } if (S.pane === 'diff' && window.Panes) window.Panes.refresh(); }
   window.refreshChanges = refreshChanges;

@@ -3,7 +3,7 @@
   "productName": "CAELIX",
   "version": "2.0.0",
   "description": "CAELIX - a desktop coding agent",
-  "main": "main.js",
+  "main": "boot.js",
   "bin": {
     "caelix": "bin/caelix.js"
   },
@@ -16,5 +16,15 @@
   "private": true,
   "devDependencies": {
     "electron": "^45.4.1"
-  }
+  },
+  "caelix": {
+    "repo": "mailsitnc-ai/caelix-v2",
+    "branch": "main",
+    "minElectron": 45
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mailsitnc-ai/caelix-v2.git"
+  },
+  "homepage": "https://github.com/mailsitnc-ai/caelix-v2"
 }

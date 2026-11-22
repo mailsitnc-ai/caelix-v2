@@ -131,6 +131,17 @@ function registerIpc() {
   handle('models:archive', () => { initStores(); return E().providers.getArchive(); });
   handle('models:unarchive', (pid, id) => { initStores(); E().providers.unarchive(pid, id); return E().providers.getArchive(); });
   handle('models:probe', async (pid) => { initStores(); const { providers } = E(); return providers.probeModels(pid, keys.get(pid), readProv().bases, { onProgress: (d, n) => win && win.webContents.send('probe:progress', { pid, d, n }) }); });
+  handle('update:info', () => require('./src/updater').current());
+  handle('update:check', async () => { const r = await require('./src/updater').check(); lastUpdate = r; return r; });
+  handle('update:apply', async (force) => {
+    if (!force && [...live.values()].some((L) => L.busy)) throw new Error('A chat is still running. Let it finish (or stop it) before updating.');
+    const u = require('./src/updater'); const c = await u.check(); lastUpdate = c;
+    if (!c.available) return { updated: false, message: c.devBuild ? 'This is a development build, so it does not self-update.' : 'You already have the newest version.' };
+    send('update:progress', { step: 'Downloading ' + c.latest.short + '…' });
+    await u.download(c.latest, path.join(userDir(), 'code'));
+    setTimeout(() => { app.relaunch(); app.quit(); }, 700); // before-quit saves every open chat first
+    return { updated: true, latest: c.latest };
+  });
   handle('last:set', (patch) => { const pv = readProv(); pv.last = { ...(pv.last || {}), ...patch }; writeProv(pv); return true; });
 
   handle('session:new', ({ cwd, provider, model, mode, kind }) => {
@@ -286,9 +297,10 @@ function registerIpc() {
   handle('selfcheck:report', (r) => { global.__selfcheckRenderer = r; return true; });
 }
 
+let lastUpdate = null;
 function buildMenu() {
   const t = [
-    { label: 'CAELIX', submenu: [{ role: 'about', label: 'About CAELIX' }, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide', label: 'Hide CAELIX' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit', label: 'Quit CAELIX' }] },
+    { label: 'CAELIX', submenu: [{ role: 'about', label: 'About CAELIX' }, { label: 'Check for Updates…', click: () => win && win.webContents.send('open-updates') }, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide', label: 'Hide CAELIX' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit', label: 'Quit CAELIX' }] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
     { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'close' }] },
@@ -327,6 +339,10 @@ app.whenReady().then(() => {
     return;
   }
   buildMenu(); registerIpc(); createWindow();
+  if (!SELF && app.isPackaged) { // quietly look for updates a few seconds after start, then every 4 hours
+    const probe = () => require('./src/updater').check().then((r) => { lastUpdate = r; if (r.available) send('update:status', r); }).catch(() => {});
+    setTimeout(probe, 6000); setInterval(probe, 4 * 3600e3);
+  }
   if (SELF) require('./src/selfcheck').run({ app, getWin: () => win, timing, ROOT, userDir, keys, live });
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 });

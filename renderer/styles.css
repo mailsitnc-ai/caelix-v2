@@ -163,3 +163,7 @@ code { font-family: var(--mono); font-size: 12.8px; background: var(--glass3); p
 .msg.user .uimgs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; } .msg.user .uimgs img { max-width: 220px; max-height: 160px; border-radius: 12px; border: 1px solid var(--border2); display: block; cursor: zoom-in; }
 #composer.dragover { outline: 2px dashed var(--accent2); outline-offset: 2px; }
 .teamrow { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); } .teamrow:last-child { border-bottom: 0; } .teamrow .tl { width: 110px; font-weight: 600; } .teamrow .tm { flex: 1; color: var(--muted, #9db0cc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#btn-update { position: relative; } #btn-update .dotbadge { position: absolute; top: 2px; right: 2px; width: 9px; height: 9px; border-radius: 50%; background: #3ddc84; box-shadow: 0 0 8px #3ddc84; } #btn-update .dotbadge[hidden] { display: none; }
+#btn-update.has { color: #3ddc84; }
+.updbox .row { display: flex; justify-content: space-between; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--border); } .updbox .row span:first-child { color: var(--muted, #9db0cc); } .updbox .msg2 { margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: var(--glass3); border: 1px solid var(--border2); }

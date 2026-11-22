@@ -293,6 +293,32 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     await ev(`window.lazy('modals').then(()=>window.Modals.team())`); await until(`document.querySelector('.modal') && document.querySelector('.modal').innerText.includes('Team mode')`, 8000, 'team dialog');
     await ev(`document.querySelector('.modal input[type=checkbox]').click()`); await sleep(200);
     pass('Team dialog asks for a coder and a reviewer model', await ev(`(()=>{const t=document.querySelector('.modal').innerText;return t.includes('Coder')&&t.includes('Reviewer')})()`)); await shot('32-team-dialog'); await ev(`document.querySelector('#modal-host').innerHTML=''`);
+    // ---- updater ----
+    { const upd = require('./updater'); const fsx = require('fs'), pth = require('path'), osx = require('os'), cp = require('child_process');
+      const mk = (name, files) => { const d = fsx.mkdtempSync(pth.join(osx.tmpdir(), 'upd-src-')); const top = pth.join(d, 'caelix-x'); for (const [f, c] of Object.entries(files)) { fsx.mkdirSync(pth.dirname(pth.join(top, f)), { recursive: true }); fsx.writeFileSync(pth.join(top, f), c); } const tarf = pth.join(d, name + '.tar.gz'); cp.execFileSync('tar', ['-czf', tarf, '-C', d, 'caelix-x']); return tarf; };
+      const good = { 'main.js': '//', 'preload.js': '//', 'boot.js': '//', 'package.json': JSON.stringify({ name: 'caelix', version: '9.9.9' }), 'renderer/index.html': '<html></html>', 'src/engine/agent.js': '//' };
+      const base = fsx.mkdtempSync(pth.join(osx.tmpdir(), 'upd-base-')); const sha = 'a'.repeat(40);
+      await upd.installFromTar(mk('good', good), { sha, date: '2026-12-01T00:00:00Z' }, base);
+      const cur = JSON.parse(fsx.readFileSync(pth.join(base, 'current.json'), 'utf8'));
+      pass('Updater: a valid download is unpacked and recorded as the code to run', cur.sha === sha && fsx.existsSync(pth.join(base, cur.dir, 'main.js')) && JSON.parse(fsx.readFileSync(pth.join(base, cur.dir, 'build-info.json'), 'utf8')).sha === sha);
+      pass('Updater: newer downloaded code is chosen over an older installer', upd.chooseRootFor(base, { commitTime: '2026-11-01T00:00:00Z' }) === 'downloaded');
+      pass('Updater: a newer installer wins over older downloaded code', upd.chooseRootFor(base, { commitTime: '2027-01-01T00:00:00Z' }) === 'bundled');
+      let e1 = ''; try { await upd.installFromTar(mk('other', { ...good, 'package.json': JSON.stringify({ name: 'not-caelix' }) }), { sha: 'b'.repeat(40), date: '2026-12-02T00:00:00Z' }, base); } catch (e) { e1 = e.message; }
+      let e2 = ''; try { const bad = { ...good }; delete bad['main.js']; await upd.installFromTar(mk('missing', bad), { sha: 'c'.repeat(40), date: '2026-12-02T00:00:00Z' }, base); } catch (e) { e2 = e.message; }
+      pass('Updater: refuses a download that is not CAELIX or is incomplete, and keeps the working copy', /not CAELIX/.test(e1) && /missing main.js/.test(e2) && JSON.parse(fsx.readFileSync(pth.join(base, 'current.json'), 'utf8')).sha === sha, e1 + ' | ' + e2);
+      const bi = pth.join(ROOT, 'build-info.json'); fsx.writeFileSync(bi, JSON.stringify({ sha: 'd'.repeat(40), commitTime: '2026-11-01T00:00:00Z' }));
+      try {
+        upd.setFetch(async () => ({ ok: true, status: 200, json: async () => ({ sha: 'e'.repeat(40), commit: { committer: { date: '2026-12-05T00:00:00Z' }, message: 'Add a thing\n\nmore' } }) }));
+        const r1 = await upd.check(); pass('Updater: reports an update when GitHub has a newer commit', r1.available === true && r1.latest.short === 'eeeeeee' && r1.latest.message === 'Add a thing');
+        upd.setFetch(async () => ({ ok: true, status: 200, json: async () => ({ sha: 'd'.repeat(40), commit: { committer: { date: '2026-11-01T00:00:00Z' }, message: 'same' } }) }));
+        pass('Updater: reports up to date when the commit is the same', (await upd.check()).available === false);
+        upd.setFetch(async () => ({ ok: false, status: 403, json: async () => ({}) })); let e3 = ''; try { await upd.check(); } catch (e) { e3 = e.message; } pass('Updater: a GitHub rate limit gives a plain message', /limiting/.test(e3));
+        upd.setFetch(async () => ({ ok: true, status: 200, json: async () => ({ sha: 'e'.repeat(40), commit: { committer: { date: '2026-12-05T00:00:00Z' }, message: 'Add a thing' } }) }));
+        await click('#btn-update'); await until(`document.querySelector('.modal') && document.querySelector('.modal').innerText.includes('Updates')`, 8000, 'updates dialog');
+        await ev(`Array.from(document.querySelectorAll('.modal footer button')).find(b=>b.textContent.includes('Check for updates')).click()`); await until(`document.querySelector('.modal').innerText.includes('newer version is available')`, 8000, 'update available text');
+        pass('Update button: opens the Updates dialog, shows the newer version and an Update now button', await ev(`Array.from(document.querySelectorAll('.modal footer button')).some(b=>b.textContent.includes('Update now') && b.style.display!=='none')`) && await ev(`document.querySelector('#btn-update').classList.contains('has')`)); await shot('34-updates');
+        await ev(`document.querySelector('#modal-host').innerHTML=''`);
+      } finally { try { fsx.unlinkSync(bi); } catch (_) {} upd.setFetch((...a) => fetch(...a)); } }
   } catch (e) { errors.push('self-check aborted: ' + (e && e.stack || e)); }
 
   const metrics = app.getAppMetrics(); const mem = { rss_main_mb: Math.round(process.memoryUsage().rss / 1048576), total_working_set_mb: Math.round(metrics.reduce((a, m) => a + (m.memory.workingSetSize || 0), 0) / 1024), processes: metrics.map((m) => ({ type: m.type, mb: Math.round((m.memory.workingSetSize || 0) / 1024) })) };
