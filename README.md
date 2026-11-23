@@ -132,6 +132,9 @@ Bring your own keys. CAELIX talks to every provider through the same OpenAI-styl
 | **Kilo Gateway** | **No** (optional) | Free models work without a key |
 | **OpenCode Zen** | **No** (optional) | Free models work without a key; the free tier is rate-limited per network |
 | **Numes** | Yes | `https://numes.ai` |
+| **AxForge** | Yes (free: 3M tokens / 30 days) | `https://console.axforge.ai/keys` |
+| **Runcrate** | Yes (free weekly allowance, GitHub sign-in) | `https://www.runcrate.ai/dashboard/api-keys` |
+| **Z.ai (GLM)** | Yes (Flash models are free) | `https://z.ai/manage-apikey/apikey-list` |
 | **Abliteration AI** | Yes | |
 | **OmniRoute** | No | A router that picks a connected model for you: `auto`, `auto/coding`, `auto/fast`, `auto/cheap`, `auto/smart` |
 

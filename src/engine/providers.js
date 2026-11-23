@@ -10,6 +10,9 @@ const PROVIDERS = [
   { id: 'coarena', name: 'CoArena', base: 'https://coarena.ai/api/v1', editableBase: true, keyHint: 'key', docs: 'https://coarena.ai/account/api', note: 'Uses https://coarena.ai/. Create a key at coarena.ai/account/api.' },
   { id: 'kilo', name: 'Kilo Gateway', base: 'https://ai-gateway.kilo.ai/api/v1', keyOptional: true, anonymous: true, keyHint: 'optional', docs: 'https://kilo.ai', note: 'Built in: free models work with no key.' },
   { id: 'zen', name: 'OpenCode Zen', base: 'https://opencode.ai/zen/v1', keyOptional: true, anonymous: true, keyHint: 'optional', docs: 'https://opencode.ai/zen', note: 'Built in: free models work with no key.' },
+  { id: 'axforge', name: 'AxForge', base: 'https://api.axforge.ai/v1', keyHint: 'key', docs: 'https://console.axforge.ai/keys', note: 'Free: 3M tokens per 30 days, no card. Qwen, GLM and MiMo models with vision.' },
+  { id: 'runcrate', name: 'Runcrate', base: 'https://api.runcrate.ai/v1', keyHint: 'key', docs: 'https://www.runcrate.ai/dashboard/api-keys', note: 'Free weekly allowance with a GitHub sign-in (account at least 30 days old). Only the free models are listed.' },
+  { id: 'zai', name: 'Z.ai (GLM)', base: 'https://api.z.ai/api/paas/v4', editableBase: true, keyHint: 'id.secret', docs: 'https://z.ai/manage-apikey/apikey-list', note: 'Free models: GLM-4.7-Flash, GLM-4.5-Flash, GLM-4.6V-Flash. Use a key made at z.ai (not bigmodel.cn) with the base https://api.z.ai/api/paas/v4. A GLM Coding Plan key needs https://api.z.ai/api/coding/paas/v4 instead.' },
   { id: 'numes', name: 'Numes', base: 'https://api.numes.ai/api/v1', keyHint: 'key', docs: 'https://numes.ai/dashboard/keys' },
   { id: 'abliteration', name: 'Abliteration AI', base: 'https://api.abliteration.ai/v1', keyHint: 'key', docs: 'https://abliteration.ai' },
   { id: 'omniroute', name: 'OmniRoute', virtual: true, base: '', editableBase: true, keyOptional: true,
@@ -25,6 +28,7 @@ const OMNI_MODELS = [
   { id: 'auto/smart', desc: 'OmniRoute · Quality objective' },
 ];
 
+const RUNCRATE_FREE = /^(deepseek-ai\/DeepSeek-V4\.1-Flash|zai-org\/GLM-5\.3-Flash|zai-org\/GLM-5\.3|Qwen\/Qwen3\.8-Flash|openai\/gpt-oss-120b)$/i;
 const byId = (id) => PROVIDERS.find((p) => p.id === id);
 const modelCache = new Map(); // providerId -> {at, models}
 
@@ -64,6 +68,9 @@ async function listModels(providerId, key, overrides, { force } = {}) {
       free: m.pricing ? (Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0) : (/:free$/.test(m.id)),
     }));
   }
+  if (p.id === 'zai') { models = models.filter((m) => /^glm-[\d.]+v?-flash$/i.test(m.id)); models.forEach((m) => { m.free = true; }); } // only the Flash models are free; others answer 1113 (needs balance)
+  if (p.id === 'runcrate') { models = models.filter((m) => RUNCRATE_FREE.test(m.id)); models.forEach((m) => { m.free = true; }); }
+  if (p.id === 'axforge') models.forEach((m) => { m.free = true; });
   archiveClaude(providerId, models); models = models.filter((m) => !isClaudeArchived(m.id));
   if (p.id === 'nvidia') models = models.filter((m) => !RE.nochat.test(m.id)); // NIM lists embedding / safety / vision-only functions that cannot chat
   models.sort((a, b) => a.id.localeCompare(b.id));
@@ -86,6 +93,12 @@ async function streamChat({ provider, key, base, model, messages, tools, signal,
       const t402 = await res.text().catch(() => ''); const m = /afford (\d+)/.exec(t402); const can = m ? Number(m[1]) : 0;
       if (can >= 256) { body.max_tokens = Math.max(256, can - 64); continue; }
       const e = new Error(`${p.name}: HTTP 402 ${t402.slice(0, 300)}`); e.status = 402; throw e;
+    }
+    if (res.status === 429 && provider === 'zai') { // Z.ai answers 1113 (no balance / wrong endpoint) with HTTP 429; retrying cannot help
+      const tz = await res.text().catch(() => '');
+      if (/"1113"|"code":\s*1113/.test(tz)) { const e = new Error(`${p.name}: no free balance for this model or wrong endpoint (code 1113). Use a Flash model, and the base https://api.z.ai/api/paas/v4 (Coding Plan keys: https://api.z.ai/api/coding/paas/v4). ${tz.slice(0, 160)}`); e.status = 402; throw e; }
+      if (attempt < 2) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
+      const e = new Error(`${p.name}: HTTP 429 ${tz.slice(0, 300)}`); e.status = 429; throw e;
     }
     if (res.status === 429 && attempt < 2) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
     break;
