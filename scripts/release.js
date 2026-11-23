@@ -51,7 +51,7 @@ function win(zip) {
   fs.rmSync(path.join(dir, 'resources', 'default_app.asar'), { force: true });
   appCode(path.join(dir, 'resources', 'app'));
   const icon = path.join(ROOT, 'assets', 'icons', 'icon.ico');
-  if (fs.existsSync(icon) && process.env.CAELIX_RESEDIT) { try { sh(process.execPath, [path.join(__dirname, 'set-exe-icon.js'), path.join(dir, 'CAELIX.exe'), icon], { cwd: ROOT }); log('set exe icon'); } catch (e) { log('exe icon not set: ' + e.message.slice(0, 200)); } }
+  if (fs.existsSync(icon)) { try { sh(process.execPath, [path.join(__dirname, 'set-exe-icon.js'), path.join(dir, 'CAELIX.exe'), icon, V], { cwd: ROOT, env: { ...process.env, NODE_PATH: process.env.NODE_PATH || path.join(ROOT, 'dist', 'release-tools', 'node_modules') } }); log('set exe icon and name'); } catch (e) { log('exe icon NOT set (install resedit and set NODE_PATH): ' + String(e.stderr || e.message).slice(0, 200)); } }
   const outs = [];
   const zipOut = path.join(OUT, `CAELIX-${V}-win-x64-portable.zip`); fs.rmSync(zipOut, { force: true });
   sh('zip', ['-q', '-r', '-X', zipOut, 'CAELIX'], { cwd: stage }); outs.push(zipOut); log('built ' + zipOut);
