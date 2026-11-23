@@ -25,7 +25,7 @@ VIAddVersionKey "FileVersion" "@VERSION@"
 
 Section "CAELIX"
   SetOutPath "$INSTDIR"
-  File /r "@SRC@\*.*"
+  File /r "@SRC@/*.*"
   WriteUninstaller "$INSTDIR\Uninstall CAELIX.exe"
   CreateDirectory "$SMPROGRAMS\CAELIX"
   CreateShortcut "$SMPROGRAMS\CAELIX\CAELIX.lnk" "$INSTDIR\CAELIX.exe"

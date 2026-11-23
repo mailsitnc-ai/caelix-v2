@@ -55,11 +55,12 @@ function win(zip) {
   const outs = [];
   const zipOut = path.join(OUT, `CAELIX-${V}-win-x64-portable.zip`); fs.rmSync(zipOut, { force: true });
   sh('zip', ['-q', '-r', '-X', zipOut, 'CAELIX'], { cwd: stage }); outs.push(zipOut); log('built ' + zipOut);
-  let mk = ''; for (const c of ['/opt/homebrew/opt/makensis/bin/makensis', '/usr/local/opt/makensis/bin/makensis']) if (!mk && fs.existsSync(c)) mk = c; if (!mk) { try { mk = sh('which', ['makensis']).trim(); } catch (_) {} }
+  let mk = ''; const cellar = ['/opt/homebrew/Cellar/makensis', '/usr/local/Cellar/makensis'].flatMap((d) => (fs.existsSync(d) ? fs.readdirSync(d).map((v) => path.join(d, v, 'bin', 'makensis')) : []));
+  for (const c of ['/opt/homebrew/opt/makensis/bin/makensis', '/usr/local/opt/makensis/bin/makensis', ...cellar]) if (!mk && fs.existsSync(c)) mk = c; if (!mk) { try { mk = sh('which', ['makensis']).trim(); } catch (_) {} }
   if (mk) {
     const nsi = path.join(stage, 'setup.nsi'); const exeOut = path.join(OUT, `CAELIX-${V}-win-x64-Setup.exe`); fs.rmSync(exeOut, { force: true });
-    fs.writeFileSync(nsi, fs.readFileSync(path.join(__dirname, 'installer.nsi'), 'utf8').replace(/@VERSION@/g, V).replace(/@SRC@/g, dir.replace(/\//g, '\\')).replace(/@OUT@/g, exeOut.replace(/\//g, '\\')).replace(/@ICON@/g, icon.replace(/\//g, '\\')));
-    sh(mk, ['-V1', nsi]); outs.push(exeOut); log('built ' + exeOut);
+    fs.writeFileSync(nsi, fs.readFileSync(path.join(__dirname, 'installer.nsi'), 'utf8').replace(/@VERSION@/g, V).replace(/@SRC@/g, dir).replace(/@OUT@/g, exeOut).replace(/@ICON@/g, icon));
+    sh(mk, ['-V1', nsi], { env: { ...process.env, LC_ALL: 'en_US.UTF-8' } }); // makensis aborts (bad_alloc) when no UTF-8 locale is set outs.push(exeOut); log('built ' + exeOut);
   } else log('makensis not found: installer skipped, portable zip only');
   fs.rmSync(stage, { recursive: true, force: true }); return outs;
 }
