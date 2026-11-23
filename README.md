@@ -229,7 +229,7 @@ assets/              icons and the logo sources
 ## Known limits
 
 - The Mac app is signed ad hoc, not notarized, and the Windows installer is not code-signed, so both show a first-launch warning (see above).
-- The Windows builds are assembled from the official Electron runtime on a Mac and were not run on a Windows machine before release. Please report problems.
+- The Apple Silicon Mac build was run and tested before release. The Intel Mac and Windows builds are assembled from the official Electron runtimes on an Apple Silicon Mac and could not be run there (no Windows machine, no Rosetta), so they were checked for file integrity but not launched. Please report problems.
 - Not built yet: language-server integration, worktree tools, scheduled tasks, plugins, voice input, split view and drag-to-arrange panels. The built-in terminal is a plain shell, not a full pseudo-terminal.
 - Live streaming has been tried end to end with NVIDIA NIM (through OmniRoute) and Kilo Gateway. The other providers share the same code path but were not all tested with live keys, and they depend on your key and their limits.
 
