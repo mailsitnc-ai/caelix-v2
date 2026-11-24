@@ -212,6 +212,17 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     const fp2 = await engineTurn(work, 'bypassPermissions', [{ say: 'x', tools: [{ name: 'Bash', input: { command: 'echo "git push --force" >/dev/null; echo ran' } }] }, { say: 'y' }]);
     pass('a disabled hook no longer runs', fp2.evs.some((e) => e.type === 'tool_result' && /ran/.test(e.output)));
     await ev(`window.caelix.hooksRemove(${JSON.stringify(work)}, ${JSON.stringify(hid)}, 'user')`); pass('hooks can be removed', !(await ev(`window.caelix.hooksList(${JSON.stringify(work)})`)).some((h) => h.id === hid));
+    // ---- the loop keeps going after a failed step, and always says why a turn ended ----
+    { const kf = require('path').join(work, 'keepgoing.txt');
+      const td = (a, b) => ({ name: 'TodoWrite', input: { todos: [{ content: 'read the file', status: a }, { content: 'write the file', status: b }] } });
+      const kg = await engineTurn(work, 'bypassPermissions', [{ say: 'start', tools: [td('in_progress', 'pending'), { name: 'Read', input: { file_path: require('path').join(work, 'nope-missing.txt') } }] }, { say: 'It failed, I stop here.' }, { say: 'retrying', tools: [{ name: 'Write', input: { file_path: kf, content: 'ok' } }, td('completed', 'completed')] }, { say: 'All done.' }]);
+      pass('keep going: a failed step with an unfinished checklist does not end the turn (model is reminded and finishes the job)', require('fs').existsSync(kf) && kg.evs.some((e) => e.type === 'info' && /checklist item/.test(e.text)), JSON.stringify(kg.evs.filter((e) => e.type === 'info' || e.type === 'stop')));
+      pass('keep going: ends with reason "finished" once every item is completed', (kg.evs.filter((e) => e.type === 'stop').pop() || {}).reason === 'finished');
+      const sg = await engineTurn(work, 'bypassPermissions', [{ say: 'start', tools: [td('in_progress', 'pending')] }, { say: 'no' }, { say: 'no' }, { say: 'no' }, { say: 'no' }, { say: 'no' }]);
+      const sgStop = sg.evs.filter((e) => e.type === 'stop').pop() || {};
+      pass('stubborn model: after the reminders the turn ends with a clear reason (unfinished items named)', sgStop.reason === 'unfinished' && /write the file/.test(sgStop.detail), JSON.stringify(sgStop));
+      const em = await engineTurn(work, 'bypassPermissions', [{ say: '' }, { say: 'ok here I am' }]);
+      pass('an empty model reply is not accepted as the end of the turn', em.evs.some((e) => e.type === 'info' && /Empty reply/.test(e.text)) && (em.evs.filter((e) => e.type === 'stop').pop() || {}).reason === 'finished'); }
     // ---- team mode (coder + reviewer), images, auto-naming ----
     { const wfile = require('path').join(work, 'team-out.txt');
       const rtT = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'bypassPermissions', kind: 'code' }); rtT.team = true; rtT.coder = { provider: 'pretend', model: 'coder-x' }; rtT.reviewer = { provider: 'pretend', model: 'reviewer-y' };

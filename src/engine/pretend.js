@@ -3,7 +3,7 @@
 // A user message may contain  PRETEND: [ {say?, tools?:[{name,input}]}, ... ]  -- one step per model call.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function lastUserIndex(messages) { for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === 'user') return i; return -1; }
+function lastUserIndex(messages) { for (let i = messages.length - 1; i >= 0; i--) { const m = messages[i]; if (m.role === 'user' && !(typeof m.content === 'string' && m.content.startsWith('[CAELIX reminder]'))) return i; } return -1; }
 
 async function streamPretend({ messages, onText, signal }) {
   const ui = lastUserIndex(messages); const u = messages[ui];

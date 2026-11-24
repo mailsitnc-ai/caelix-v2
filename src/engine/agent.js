@@ -34,6 +34,7 @@ function buildSystem(rt, env) {
     'You are CAELIX in Code mode, a coding agent running on the user\'s computer. You work inside the project folder using tools.',
     'Be direct and brief. Read before you edit. Prefer small exact edits. Run independent tool calls together in one reply.',
     'Never claim something works unless a tool result shows it. When a task needs several steps, keep a checklist with TodoWrite.',
+    'Finish the whole job in one go. If a tool fails, read the error, change your approach and try again; do not stop at the first failure and do not hand back a partial result. Stop only when every checklist item is completed, or when you are truly blocked: then say exactly what blocks you and what you need from the user.',
     `Working directory: ${rt.st.cwd}`, `Platform: ${process.platform} (${os.release()})`, `Date: ${new Date().toISOString().slice(0, 10)}`,
     `Permission mode: ${rt.st.mode}. In plan mode you may only read; present a plan with ExitPlanMode.`,
   ];
@@ -122,8 +123,9 @@ function breakdown(messages) {
 }
 
 async function loop(rt, env, { messages, tools, depth, readOnly }) {
-  const st = rt.st; let final = '';
-  for (let iter = 0; iter < 60; iter++) {
+  const st = rt.st; let final = ''; let lastFailed = []; let quiet = 0; // quiet = consecutive reminders that produced no tool call
+  const maxIter = depth === 0 ? 250 : 60;
+  for (let iter = 0; iter < maxIter; iter++) {
     if (env.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     if (depth === 0) {
       const limit = rt.ctxLimit || 2000000;
@@ -131,12 +133,22 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
       messages = rt.messages;
     }
     const msgId = 'm' + Date.now().toString(36) + iter; let started = false;
-    const r = await callModel(rt, env, messages, tools, (t) => { if (depth === 0) { if (!started) { started = true; env.emit({ type: 'text_start', id: msgId }); } env.emit({ type: 'text', id: msgId, delta: t }); } },
+    const r = await callModelRetry(rt, env, messages, tools, (t) => { if (depth === 0) { if (!started) { started = true; env.emit({ type: 'text_start', id: msgId }); } env.emit({ type: 'text', id: msgId, delta: t }); } },
       (t) => depth === 0 && env.emit({ type: 'thinking', delta: t }));
     if (r.usage) { rt.usage.in += r.usage.in; rt.usage.out += r.usage.out; }
     messages.push({ role: 'assistant', content: r.text || null, ...(r.toolCalls.length ? { tool_calls: r.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.args } })) } : {}) });
     if (depth === 0) { env.emit({ type: 'text_end', id: msgId }); env.emit({ type: 'context', used: estTokens(messages), limit: rt.ctxLimit || 2000000, usage: rt.usage, breakdown: breakdown(messages) }); }
-    if (!r.toolCalls.length) { final = r.text; break; }
+    if (!r.toolCalls.length) {
+      final = r.text;
+      if (depth > 0) break;
+      const chk = stopCheck(rt, st, r, lastFailed);
+      if (chk.nudge && quiet < 3 && (rt.nudges = (rt.nudges || 0) + 1) <= 12) {
+        quiet++; env.emit({ type: 'info', text: chk.note });
+        messages.push({ role: 'user', content: NUDGE_TAG + chk.nudge }); continue;
+      }
+      env.emit({ type: 'stop', reason: chk.reason, detail: chk.detail }); return final;
+    }
+    quiet = 0;
     // 1) decide permissions sequentially (prompts are shown one at a time)
     const plan = [];
     for (const c of r.toolCalls) {
@@ -176,10 +188,38 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
     const mu = plan.filter((p) => !ro.includes(p));
     await Promise.all(ro.map(run));
     for (const p of mu) { if (env.signal.aborted) break; await run(p); }
+    lastFailed = plan.filter((p) => { const o = results.get(p.c.id); return o !== undefined && (p.err || /^Error/.test(String(o))) && !/^The user denied/.test(String(o)); }).map((p) => p.c.name + ': ' + String(results.get(p.c.id)).split('\n')[0].slice(0, 160));
     for (const c of r.toolCalls) messages.push({ role: 'tool', tool_call_id: c.id, content: results.get(c.id) || 'Cancelled.' });
     if (depth === 0) env.emit({ type: 'mode', mode: st.mode });
   }
+  if (depth === 0) env.emit({ type: 'stop', reason: 'step-limit', detail: `Stopped after ${maxIter} steps in one turn (safety limit). Send "continue" to carry on.` });
   return final;
+}
+
+// A turn must not end just because the model went quiet. Decide whether to remind it, and if not, why the turn really ended.
+const NUDGE_TAG = '[CAELIX reminder] ';
+function stopCheck(rt, st, r, lastFailed) {
+  const open = (st.todos || []).filter((t) => t.status !== 'completed');
+  const list = open.slice(0, 6).map((t) => '- ' + String(t.content).slice(0, 100)).join('\n');
+  if (r.finish === 'length') return { nudge: 'Your last reply was cut off because it hit the length limit. Continue exactly where you stopped, in smaller steps.', note: 'Reply was cut off; asking the model to continue.', reason: 'cut-off', detail: 'The model hit its output length limit and did not finish.' };
+  if (!String(r.text || '').trim()) return { nudge: 'Your last reply was empty. Carry on with the task now: call the next tool, or say exactly what blocks you.', note: 'Empty reply; asking the model to continue.', reason: 'empty', detail: 'The model returned an empty reply.' };
+  if (open.length) return { nudge: `Your checklist still has unfinished items:\n${list}\nDo not stop. Fix whatever failed, try a different approach if needed, and keep going until every item is completed. Mark items completed with TodoWrite as you finish them. Only if you are truly blocked, say exactly what blocks you and what you need.`, note: `${open.length} checklist item(s) not done; asking the model to keep going.`, reason: 'unfinished', detail: `Stopped with ${open.length} checklist item(s) not done: ${open.slice(0, 3).map((t) => t.content).join('; ')}. The model did not continue after reminders.` };
+  if (lastFailed.length) return { nudge: `The last action failed (${lastFailed.join(' | ')}). Do not stop here: fix the cause and retry, or use another way to reach the goal. Only if it truly cannot be done, explain exactly why.`, note: 'Last action failed; asking the model to retry.', reason: 'failed', detail: `The last action failed and the model gave up: ${lastFailed[0]}` };
+  return { reason: 'finished', detail: 'The model said it was done.' };
+}
+
+async function callModelRetry(rt, env, messages, tools, onText, onThinking) {
+  let tries = 0;
+  for (;;) {
+    let started = false;
+    try { return await callModel(rt, env, messages, tools, (t) => { started = true; onText && onText(t); }, onThinking); }
+    catch (e) {
+      const transient = !e.status || e.status === 429 || e.status >= 500;
+      if (e.name === 'AbortError' || started || !transient || ++tries > 2 || (rt.provider === 'pretend')) throw e;
+      env.emit({ type: 'info', text: 'Model call failed (' + String(e.message).slice(0, 100) + '); retrying…' });
+      await new Promise((res) => setTimeout(res, 2000 * tries));
+    }
+  }
 }
 
 async function runTurn(rt, env, userText, images) {
@@ -198,7 +238,7 @@ async function runTurn(rt, env, userText, images) {
       env.emit({ type: 'subagent', phase: 'end', description: a.description || '' }); return out || '(no report)';
     },
   });
-  rt.turnSnap = new Map(); rt.turn = (rt.turn || 0) + 1;
+  rt.turnSnap = new Map(); rt.turn = (rt.turn || 0) + 1; rt.nudges = 0;
   const ups = await config.runHooks(env.settings, 'UserPromptSubmit', { prompt: userText }, st.cwd);
   if (ups.blocked) { env.emit({ type: 'error', message: 'Prompt blocked by hook: ' + ups.reason }); return; }
   if (!rt.messages.length) rt.messages.push({ role: 'system', content: buildSystem(rt, env) }); else rt.messages[0] = { role: 'system', content: buildSystem(rt, env) };
@@ -221,8 +261,8 @@ async function runTurn(rt, env, userText, images) {
     }
     env.emit({ type: 'turn_end', ok: true });
   } catch (e) {
-    if (e.name === 'AbortError') env.emit({ type: 'turn_end', ok: false, aborted: true });
-    else { env.emit({ type: 'error', message: String(e.message || e) }); env.emit({ type: 'turn_end', ok: false }); }
+    if (e.name === 'AbortError') { env.emit({ type: 'stop', reason: 'stopped', detail: 'You stopped the turn.' }); env.emit({ type: 'turn_end', ok: false, aborted: true }); }
+    else { env.emit({ type: 'error', message: String(e.message || e) }); env.emit({ type: 'stop', reason: 'error', detail: 'The model call failed: ' + String(e.message || e).slice(0, 200) }); env.emit({ type: 'turn_end', ok: false }); }
   } finally { if (teamOn) { rt.provider = mainSel.provider; rt.model = mainSel.model; } }
   config.runHooks(env.settings, 'Stop', {}, st.cwd);
 }

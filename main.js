@@ -54,14 +54,15 @@ function getLive(id) { return live.get(id) || (store.load(id) && makeLive(store.
 
 function summaryFor(L) {
   let i = L.items.length - 1; while (i >= 0 && L.items[i].type !== 'user') i--; const tools = L.items.slice(i + 1).filter((x) => x.type === 'tool' && x.output !== undefined);
-  if (!tools.length) return null; const failed = tools.filter((t) => t.error); const files = [];
+  if (!tools.length && !(L.stopInfo && L.stopInfo.reason !== 'finished')) return null; const failed = tools.filter((t) => t.error); const files = [];
   for (const t of tools) { if (t.error) continue; const f = t.input && (t.input.file_path || t.input.notebook_path || t.input.filename); if (f && ['Write', 'Edit', 'NotebookEdit', 'WriteDocument'].includes(t.name)) { const b = path.basename(f); if (!files.includes(b)) files.push(b); } }
   const last = failed[failed.length - 1];
-  return { actions: tools.length, ok: tools.length - failed.length, failed: failed.length, failedNames: Array.from(new Set(failed.map((t) => t.name))).slice(0, 4), files: files.slice(0, 8), issue: last ? String(last.output || '').split('\n')[0].slice(0, 220) : '', secs: ((Date.now() - (L.turnT0 || Date.now())) / 1000).toFixed(1) };
+  return { actions: tools.length, ok: tools.length - failed.length, failed: failed.length, failedNames: Array.from(new Set(failed.map((t) => t.name))).slice(0, 4), files: files.slice(0, 8), issue: last ? String(last.output || '').split('\n')[0].slice(0, 220) : '', stop: L.stopInfo || null, secs: ((Date.now() - (L.turnT0 || Date.now())) / 1000).toFixed(1) };
 }
 function record(L, e) {
   switch (e.type) {
-    case 'turn_start': L.turnT0 = Date.now(); break;
+    case 'turn_start': L.turnT0 = Date.now(); L.stopInfo = null; break;
+    case 'stop': L.stopInfo = { reason: e.reason, detail: e.detail }; if (e.reason !== 'finished' && e.reason !== 'stopped') L.items.push({ type: 'info', text: 'Why it stopped: ' + e.detail }); break;
     case 'text': L.assistantBuf += e.delta; break;
     case 'text_end': if (L.assistantBuf.trim()) L.items.push({ type: 'assistant', text: L.assistantBuf }); L.assistantBuf = ''; break;
     case 'tool_start': L.items.push({ type: 'tool', id: e.id, name: e.name, input: e.input, summary: e.summary }); break;

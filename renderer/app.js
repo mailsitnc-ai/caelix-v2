@@ -186,8 +186,8 @@
   }
   function addSummary(s) {
     const c = el('div', 'sumcard'); const acts = `${s.ok} succeeded${s.failed ? ', ' + s.failed + ' failed' : ''}`; const failedNames = s.failedNames && s.failedNames.length ? ` (${s.failedNames.join(', ')})` : '';
-    const text = `Task summary (${s.secs}s)\nActions: ${acts}${failedNames}${s.files.length ? '\nFiles changed: ' + s.files.join(', ') : ''}${s.issue ? '\nIssue: ' + s.issue : ''}`;
-    c.innerHTML = `<div class="sh">Summary · ${s.actions} action(s) · ${s.secs}s<button class="copybtn">Copy summary</button></div><h5>Task summary <span style="font-weight:400;color:var(--muted)">(${s.secs}s)</span></h5><ul><li><b>Actions:</b> ${esc(acts + failedNames)}</li>${s.files.length ? `<li><b>Files changed:</b> ${s.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</li>` : ''}${s.issue ? `<li><b>Issue:</b> ${esc(s.issue)}</li>` : ''}</ul>`;
+    const text = `Task summary (${s.secs}s)\nActions: ${acts}${failedNames}${s.files.length ? '\nFiles changed: ' + s.files.join(', ') : ''}${s.issue ? '\nIssue: ' + s.issue : ''}${s.stop ? '\nEnded because: ' + s.stop.detail : ''}`;
+    c.innerHTML = `<div class="sh">Summary · ${s.actions} action(s) · ${s.secs}s<button class="copybtn">Copy summary</button></div><h5>Task summary <span style="font-weight:400;color:var(--muted)">(${s.secs}s)</span></h5><ul><li><b>Actions:</b> ${esc(acts + failedNames)}</li>${s.files.length ? `<li><b>Files changed:</b> ${s.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</li>` : ''}${s.issue ? `<li><b>Issue:</b> ${esc(s.issue)}</li>` : ''}${s.stop ? `<li><b>Why it ended:</b> ${esc(s.stop.detail)}</li>` : ''}</ul>`;
     c.querySelector('.copybtn').onclick = (e) => navigator.clipboard.writeText(text).then(() => { e.target.textContent = 'Copied'; setTimeout(() => (e.target.textContent = 'Copy summary'), 1200); }).catch(() => {});
     tr().appendChild(c); moveWorkingLast();
   }
