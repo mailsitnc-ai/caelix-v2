@@ -223,6 +223,16 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
       pass('stubborn model: after the reminders the turn ends with a clear reason (unfinished items named)', sgStop.reason === 'unfinished' && /write the file/.test(sgStop.detail), JSON.stringify(sgStop));
       const em = await engineTurn(work, 'bypassPermissions', [{ say: '' }, { say: 'ok here I am' }]);
       pass('an empty model reply is not accepted as the end of the turn', em.evs.some((e) => e.type === 'info' && /Empty reply/.test(e.text)) && (em.evs.filter((e) => e.type === 'stop').pop() || {}).reason === 'finished'); }
+    { const miss = require('path').join(work, 'still-missing.txt'); const rd = { say: 'trying again', tools: [{ name: 'Read', input: { file_path: miss } }] };
+      const lp = await engineTurn(work, 'bypassPermissions', [rd, rd, rd, rd, rd, rd, rd, rd]);
+      const lres = lp.evs.filter((e) => e.type === 'tool_result'); const lstop = lp.evs.filter((e) => e.type === 'stop').pop() || {};
+      pass('repeat guard: the same failing action is warned on the 3rd try and the turn stops with reason "stuck" on the 5th', lres.length === 5 && /exact action 3 times/.test(lp.rt.messages.filter((m) => m.role === 'tool')[2].content) && lstop.reason === 'stuck', lres.length + ' results; ' + JSON.stringify(lstop));
+      const tx = await engineTurn(work, 'bypassPermissions', [1, 2, 3, 4].map((n) => ({ say: 'I will now do the thing again and again exactly like this.', tools: [{ name: 'Bash', input: { command: 'echo step' + n } }] })));
+      pass('repeat guard: the same reply text over and over is caught and the turn stops with a clear reason', (tx.evs.filter((e) => e.type === 'stop').pop() || {}).reason === 'stuck' && tx.evs.filter((e) => e.type === 'tool_result').length === 2, JSON.stringify(tx.evs.filter((e) => e.type === 'stop')));
+      const rtS = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'bypassPermissions' });
+      await engineTurn(work, 'bypassPermissions', [rd, { say: 'gave up' }], { rt: rtS }); await engineTurn(work, 'bypassPermissions', [rd, { say: 'gave up' }], { rt: rtS });
+      const users = rtS.messages.filter((m) => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('go PRETEND'));
+      pass('same prompt sent again: the model is told the earlier attempt failed and to take a different approach', users.length === 2 && !/CAELIX note/.test(users[0].content) && /same request again/.test(users[1].content) && /still-missing/.test(users[1].content), users.length + ' | ' + String(users[1] && users[1].content).slice(-260)); }
     // ---- team mode (coder + reviewer), images, auto-naming ----
     { const wfile = require('path').join(work, 'team-out.txt');
       const rtT = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'bypassPermissions', kind: 'code' }); rtT.team = true; rtT.coder = { provider: 'pretend', model: 'coder-x' }; rtT.reviewer = { provider: 'pretend', model: 'reviewer-y' };

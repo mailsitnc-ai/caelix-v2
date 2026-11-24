@@ -125,6 +125,7 @@ function breakdown(messages) {
 async function loop(rt, env, { messages, tools, depth, readOnly }) {
   const st = rt.st; let final = ''; let lastFailed = []; let quiet = 0; // quiet = consecutive reminders that produced no tool call
   const maxIter = depth === 0 ? 250 : 60;
+  const seen = new Map(); let lastText = ''; let sameText = 0; // repeat detection: identical action+result, identical reply text
   for (let iter = 0; iter < maxIter; iter++) {
     if (env.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     if (depth === 0) {
@@ -138,15 +139,22 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
     if (r.usage) { rt.usage.in += r.usage.in; rt.usage.out += r.usage.out; }
     messages.push({ role: 'assistant', content: r.text || null, ...(r.toolCalls.length ? { tool_calls: r.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.args } })) } : {}) });
     if (depth === 0) { env.emit({ type: 'text_end', id: msgId }); env.emit({ type: 'context', used: estTokens(messages), limit: rt.ctxLimit || 2000000, usage: rt.usage, breakdown: breakdown(messages) }); }
+    if (depth === 0) {
+      const norm = String(r.text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      if (norm.length > 30 && norm === lastText) sameText++; else sameText = 0;
+      lastText = norm;
+      if (sameText >= 2) { env.emit({ type: 'stop', reason: 'stuck', detail: 'The model repeated the same reply three times in a row, so CAELIX stopped it. Change the request, pick another model, or give more detail.' }); return final || r.text; }
+    }
     if (!r.toolCalls.length) {
       final = r.text;
       if (depth > 0) break;
+      if (sameText >= 1) { env.emit({ type: 'stop', reason: 'stuck', detail: 'The model repeated its last reply instead of making progress. Try a different model, or rephrase the request.' }); return final; }
       const chk = stopCheck(rt, st, r, lastFailed);
       if (chk.nudge && quiet < 3 && (rt.nudges = (rt.nudges || 0) + 1) <= 12) {
         quiet++; env.emit({ type: 'info', text: chk.note });
         messages.push({ role: 'user', content: NUDGE_TAG + chk.nudge }); continue;
       }
-      env.emit({ type: 'stop', reason: chk.reason, detail: chk.detail }); return final;
+      rt.lastFail = lastFailed.slice(); env.emit({ type: 'stop', reason: chk.reason, detail: chk.detail }); return final;
     }
     quiet = 0;
     // 1) decide permissions sequentially (prompts are shown one at a time)
@@ -189,7 +197,17 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
     await Promise.all(ro.map(run));
     for (const p of mu) { if (env.signal.aborted) break; await run(p); }
     lastFailed = plan.filter((p) => { const o = results.get(p.c.id); return o !== undefined && (p.err || /^Error/.test(String(o))) && !/^The user denied/.test(String(o)); }).map((p) => p.c.name + ': ' + String(results.get(p.c.id)).split('\n')[0].slice(0, 160));
+    let stuck = null;
+    if (depth === 0) for (const p of plan) {
+      if (['TodoWrite', 'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'].includes(p.c.name)) continue;
+      const out = results.get(p.c.id); if (out === undefined) continue;
+      const sig = p.c.name + '|' + (p.c.args || '') + '|' + String(out).slice(0, 400);
+      const n = (seen.get(sig) || 0) + 1; seen.set(sig, n);
+      if (n >= 5) stuck = { p, n };
+      else if (n >= 3) results.set(p.c.id, String(out) + `\n\n[CAELIX: you have now run this exact action ${n} times and got the same result. Running it again will not change anything. Change your approach: read the error, fix the real cause, use a different command or file, or tell the user exactly what is blocking you.]`);
+    }
     for (const c of r.toolCalls) messages.push({ role: 'tool', tool_call_id: c.id, content: results.get(c.id) || 'Cancelled.' });
+    if (stuck) { env.emit({ type: 'stop', reason: 'stuck', detail: `Stopped: the model ran the same ${stuck.p.c.name} action ${stuck.n} times with the same result and did not change its approach.` }); rt.lastFail = lastFailed.slice(); return final; }
     if (depth === 0) env.emit({ type: 'mode', mode: st.mode });
   }
   if (depth === 0) env.emit({ type: 'stop', reason: 'step-limit', detail: `Stopped after ${maxIter} steps in one turn (safety limit). Send "continue" to carry on.` });
@@ -243,7 +261,11 @@ async function runTurn(rt, env, userText, images) {
   if (ups.blocked) { env.emit({ type: 'error', message: 'Prompt blocked by hook: ' + ups.reason }); return; }
   if (!rt.messages.length) rt.messages.push({ role: 'system', content: buildSystem(rt, env) }); else rt.messages[0] = { role: 'system', content: buildSystem(rt, env) };
   rt.checkpoints.push({ turn: rt.turn, msgIndex: rt.messages.length, prompt: userText.slice(0, 80), snap: rt.turnSnap });
-  const fullText = userText + ((ups.outputs || []).length ? '\n\n' + ups.outputs.join('\n') : '');
+  let fullText = userText + ((ups.outputs || []).length ? '\n\n' + ups.outputs.join('\n') : '');
+  const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const again = norm(userText).length > 3 && rt.messages.some((m) => m.role === 'user' && typeof m.content === 'string' && !m.content.startsWith(NUDGE_TAG) && norm(m.content.split('\n\n[CAELIX note')[0]) === norm(userText));
+  if (again) fullText += '\n\n[CAELIX note: the user sent this same request again, so your earlier attempt did not get the job done. Do NOT repeat the same actions or the same text. Look at what went wrong' + ((rt.lastFail || []).length ? ' (last failures: ' + rt.lastFail.slice(0, 3).join(' | ') + ')' : '') + ', take a different approach, and finish the work.]';
+  rt.lastFail = [];
   rt.messages.push({ role: 'user', content: images && images.length ? [{ type: 'text', text: fullText || 'Look at the attached image.' }, ...images.map((u) => ({ type: 'image_url', image_url: { url: u } }))] : fullText });
   env.emit({ type: 'turn_start', turn: rt.turn });
   const mainSel = { provider: rt.provider, model: rt.model };
