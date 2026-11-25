@@ -1,4 +1,5 @@
 'use strict';
+const see = require('./see');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -34,6 +35,7 @@ function buildSystem(rt, env) {
     'You are CAELIX in Code mode, a coding agent running on the user\'s computer. You work inside the project folder using tools.',
     'Be direct and brief. Read before you edit. Prefer small exact edits. Run independent tool calls together in one reply.',
     'Never claim something works unless a tool result shows it. When a task needs several steps, keep a checklist with TodoWrite.',
+    'You can see what you build even without vision: after creating or changing a web page, game or any visual output, call LookAtPage on it, fix every error and layout problem it reports, and look again before saying it works. Read also works on image files and screenshots.',
     'Finish the whole job in one go. If a tool fails, read the error, change your approach and try again; do not stop at the first failure and do not hand back a partial result. Stop only when every checklist item is completed, or when you are truly blocked: then say exactly what blocks you and what you need from the user.',
     `Working directory: ${rt.st.cwd}`, `Platform: ${process.platform} (${os.release()})`, `Date: ${new Date().toISOString().slice(0, 10)}`,
     `Permission mode: ${rt.st.mode}. In plan mode you may only read; present a plan with ExitPlanMode.`,
@@ -74,6 +76,35 @@ async function routeAcross(objective, env, args, onText) {
 
 async function callModel(rt, env, messages, tools, onText, onThinking) {
   messages = prepareMessages(messages);
+  const hasImages = messages.some((m) => Array.isArray(m.content) && m.content.some((x) => x.type === 'image_url'));
+  if (hasImages && rt.provider !== 'pretend') {
+    const sees = rt.provider !== 'omniroute' && SEES_IMAGES.test(rt.model || '');
+    const plain = await imagesAsText(messages, false);
+    if (!sees) messages = plain;
+    else {
+      try { return await callModelWith(rt, env, await imagesAsText(messages, true), tools, onText, onThinking); }
+      catch (e) { if (e.name === 'AbortError' || ![400, 404, 413, 415, 422].includes(e.status)) throw e; messages = plain; }
+    }
+  }
+  return callModelWith(rt, env, messages, tools, onText, onThinking);
+}
+
+// Models known to accept pictures. Every other model gets the picture as text read on this computer.
+const SEES_IMAGES = /gemini|gpt-4o|gpt-4\.1|llama-4|pixtral|[-/]vl\b|-vl-|vision|glm-\d[\d.]*v\b/i;
+async function imagesAsText(messages, keepImage) {
+  return Promise.all(messages.map(async (m) => {
+    if (!Array.isArray(m.content) || !m.content.some((x) => x.type === 'image_url')) return m;
+    const parts = []; let n = 0;
+    for (const x of m.content) {
+      if (x.type !== 'image_url') { parts.push(x); continue; }
+      if (keepImage) parts.push(x);
+      parts.push({ type: 'text', text: `\n[Attached image ${++n}, read on this computer so you can use it without vision]\n${await see.describeDataUrl(x.image_url.url)}\n` });
+    }
+    return { ...m, content: keepImage ? parts : parts.map((x) => x.text).join('\n') };
+  }));
+}
+
+async function callModelWith(rt, env, messages, tools, onText, onThinking) {
   const args = { messages, tools, signal: env.signal, onText, onThinking, effort: rt.effort };
   if (rt.provider === 'pretend') return streamPretend({ messages, onText, signal: env.signal });
   // A chat still set to an archived (Claude) model is routed like OmniRoute's coding objective instead of failing.
@@ -161,7 +192,7 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
     const plan = [];
     for (const c of r.toolCalls) {
       let input; try { input = JSON.parse(c.args || '{}'); } catch (_) { plan.push({ c, err: 'Error: tool arguments were not valid JSON.' }); continue; }
-      if (readOnly && !['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash'].includes(c.name)) { plan.push({ c, input, err: 'Error: this sub-agent is read-only.' }); continue; }
+      if (readOnly && !['LookAtPage', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Bash'].includes(c.name)) { plan.push({ c, input, err: 'Error: this sub-agent is read-only.' }); continue; }
       if (depth === 0) env.emit({ type: 'tool_start', id: c.id, name: c.name, input, summary: summarize(c.name, input) });
       const pre = await config.runHooks(env.settings, 'PreToolUse', { tool_name: c.name, tool_input: input }, st.cwd, c.name);
       if (pre.blocked) { plan.push({ c, input, err: 'Blocked by hook: ' + pre.reason }); continue; }

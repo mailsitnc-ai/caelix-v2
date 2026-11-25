@@ -1,4 +1,5 @@
 'use strict';
+const see = require('./see');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -6,14 +7,14 @@ const { spawn } = require('child_process');
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', '.DS_Store']);
 const MUTATING = new Set(['Write', 'Edit', 'NotebookEdit', 'Bash']);
-const READ_ONLY = new Set(['WriteDocument', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'Skill', 'AskUserQuestion', 'TaskStop', 'EnterPlanMode', 'ExitPlanMode']);
+const READ_ONLY = new Set(['LookAtPage', 'WriteDocument', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'Skill', 'AskUserQuestion', 'TaskStop', 'EnterPlanMode', 'ExitPlanMode']);
 
 const def = (name, description, properties, required) => ({
   type: 'function', function: { name, description, parameters: { type: 'object', properties, required: required || [] } },
 });
 
 const DEFS = [
-  def('Read', 'Read a text file. Returns numbered lines. Use offset/limit for big files.', { file_path: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, ['file_path']),
+  def('Read', 'Read a text file (returns numbered lines) or an image file (returns its size, colours and the text in it). Use offset/limit for big files.', { file_path: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, ['file_path']),
   def('Write', 'Create or overwrite a file. An existing file must have been read first.', { file_path: { type: 'string' }, content: { type: 'string' } }, ['file_path', 'content']),
   def('Edit', 'Replace an exact string in a file. old_string must match once unless replace_all is true. File must have been read first.', { file_path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' }, replace_all: { type: 'boolean' } }, ['file_path', 'old_string', 'new_string']),
   def('NotebookEdit', 'Replace the source of one cell of a .ipynb notebook.', { notebook_path: { type: 'string' }, cell_index: { type: 'number' }, new_source: { type: 'string' } }, ['notebook_path', 'cell_index', 'new_source']),
@@ -21,6 +22,7 @@ const DEFS = [
   def('Grep', 'Search file contents with a regular expression.', { pattern: { type: 'string' }, path: { type: 'string' }, glob: { type: 'string' }, output_mode: { type: 'string', enum: ['content', 'files_with_matches', 'count'] }, case_insensitive: { type: 'boolean' } }, ['pattern']),
   def('Bash', 'Run a shell command. Default timeout 120s (max 600s); slower commands move to the background. Set run_in_background for servers.', { command: { type: 'string' }, description: { type: 'string' }, timeout: { type: 'number' }, run_in_background: { type: 'boolean' } }, ['command']),
   def('TaskStop', 'Stop a background command by task id.', { task_id: { type: 'string' } }, ['task_id']),
+  def('LookAtPage', 'SEE a web page, game or UI you built, without a vision model. Renders an HTML file or URL in a hidden window and returns console errors, layout problems, every visible element with position and colour, whether canvases are blank, and the text read from a screenshot. Use it after creating or changing anything visual. Optional clicks (CSS selectors or button text) and keys are applied before looking.', { target: { type: 'string', description: 'HTML file path (relative to the project) or http(s) URL, e.g. index.html or http://localhost:3000' }, width: { type: 'number' }, height: { type: 'number' }, wait_ms: { type: 'number' }, clicks: { type: 'array', items: { type: 'string' } }, keys: { type: 'array', items: { type: 'string' } } }, ['target']),
   def('WebFetch', 'Fetch a URL and return its text.', { url: { type: 'string' } }, ['url']),
   def('WebSearch', 'Search the web; returns titles, URLs and snippets.', { query: { type: 'string' } }, ['query']),
   def('TodoWrite', 'Replace the task checklist. Statuses: pending, in_progress, completed.', { todos: { type: 'array', items: { type: 'object', properties: { content: { type: 'string' }, status: { type: 'string' } } } } }, ['todos']),
@@ -105,6 +107,7 @@ const IMPL = {
   async Read(ctx, a) {
     const f = resolveP(ctx, a.file_path); const st = fs.statSync(f);
     if (st.isDirectory()) return 'Error: path is a directory: ' + f;
+    if (see.IMAGE_EXT.test(f)) { ctx.readFiles.add(f); return see.describeImage(f); }
     const buf = fs.readFileSync(f); if (!isText(buf)) return 'Error: binary file (' + st.size + ' bytes), cannot display';
     ctx.readFiles.add(f);
     const lines = buf.toString('utf8').split('\n'); const off = Math.max(0, (a.offset || 1) - 1); const lim = a.limit || 2000;
@@ -181,6 +184,7 @@ const IMPL = {
     }
     return out.length ? out.join('\n\n') : 'No results (search backend may be blocked).';
   },
+  async LookAtPage(ctx, a) { return see.lookAtPage({ ...a, cwd: ctx.cwd }); },
   async TodoWrite(ctx, a) { ctx.todos = a.todos || []; ctx.emit && ctx.emit({ type: 'todos', todos: ctx.todos }); return 'Task list updated.'; },
   async AskUserQuestion(ctx, a) { const ans = await ctx.ask({ kind: 'question', question: a.question, options: a.options || [] }); return 'User answered: ' + ans; },
   async EnterPlanMode(ctx) { ctx.setMode('plan'); return 'Plan mode on: explore read-only, then call ExitPlanMode with your plan.'; },

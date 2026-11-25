@@ -233,6 +233,20 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
       await engineTurn(work, 'bypassPermissions', [rd, { say: 'gave up' }], { rt: rtS }); await engineTurn(work, 'bypassPermissions', [rd, { say: 'gave up' }], { rt: rtS });
       const users = rtS.messages.filter((m) => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('go PRETEND'));
       pass('same prompt sent again: the model is told the earlier attempt failed and to take a different approach', users.length === 2 && !/CAELIX note/.test(users[0].content) && /same request again/.test(users[1].content) && /still-missing/.test(users[1].content), users.length + ' | ' + String(users[1] && users[1].content).slice(-260)); }
+    // ---- seeing without a vision model: render pages and read images as text ----
+    { const fsv = require('fs'), pthv = require('path'); const see = require('./engine/see');
+      fsv.writeFileSync(pthv.join(work, 'look.html'), '<!doctype html><title>Look test</title><body style="margin:0;background:#101830;color:#fff;font:32px sans-serif"><h1>PIXEL SCORE BOARD</h1><button id="go" onclick="document.querySelector(\'h1\').textContent=\'GAME STARTED\'">Start</button><canvas width="300" height="200" style="display:block"></canvas><img src="missing.png" alt="hero"><script>undefinedThing()</script></body>');
+      const lk = await engineTurn(work, 'default', [{ say: 'looking', tools: [{ name: 'LookAtPage', input: { target: 'look.html', clicks: ['Start'] } }] }, { say: 'seen' }]);
+      const out = (lk.evs.find((e) => e.type === 'tool_result') || {}).output || '';
+      pass('LookAtPage runs without a permission prompt for a local file and reports the title and elements', /Title: Look test/.test(out) && /button#go/.test(out), out.slice(0, 300));
+      pass('LookAtPage reports the script error, the broken image and the blank canvas', /undefinedThing/.test(out) && /Broken image: missing\.png/.test(out) && /nothing seems to be drawn/.test(out), out.slice(0, 900));
+      const full = await see.lookAtPage({ target: 'look.html', cwd: work, clicks: ['Start'] });
+      const shot = (/Screenshot saved: (.*)/.exec(full) || [])[1];
+      pass('LookAtPage clicks buttons and reads the screenshot text with the computer\'s own OCR', /click "Start": done/.test(full) && /GAME STARTED/.test(full.split('Text actually readable on the screenshot:')[1] || ''), full.slice(-400));
+      const rd = shot ? await see.describeImage(shot) : '';
+      pass('an image file is described as text (size, colours, words) for models without vision', /Image size: \d+x\d+/.test(rd) && /GAME STARTED/.test(rd), rd.slice(0, 300));
+      const du = shot ? await see.describeDataUrl('data:image/png;base64,' + fsv.readFileSync(shot).toString('base64')) : '';
+      pass('an attached screenshot is turned into text the same way', /GAME STARTED/.test(du), du.slice(0, 200)); }
     // ---- team mode (coder + reviewer), images, auto-naming ----
     { const wfile = require('path').join(work, 'team-out.txt');
       const rtT = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'bypassPermissions', kind: 'code' }); rtT.team = true; rtT.coder = { provider: 'pretend', model: 'coder-x' }; rtT.reviewer = { provider: 'pretend', model: 'reviewer-y' };

@@ -42,6 +42,8 @@ function decide({ tool, input, mode, rules, cwd }) {
   }
   if (tool === 'ExitPlanMode') return { d: 'allow', why: 'asks the user itself' };
   if (['Read', 'Glob', 'Grep', 'TodoWrite', 'AskUserQuestion', 'EnterPlanMode', 'Skill', 'TaskStop', 'Agent', 'WriteDocument'].includes(tool)) return { d: 'allow', why: 'read-only tool' };
+  // looking at a local page or localhost is read-only; other web addresses follow the web rules
+  if (tool === 'LookAtPage' && !/^https?:\/\/(?!(localhost|127\.0\.0\.1|\[::1\])([:/]|$))/i.test(String(input.target || ''))) return { d: 'allow', why: 'looks at a local page' };
   if (mode === 'dontAsk') return { d: 'deny', why: "don't-ask mode allows only pre-approved tools" };
   if (mode === 'auto') return { d: 'allow', why: 'auto mode' };
   if (mode === 'acceptEdits' && (mut || (tool === 'Bash' && FS_BASH.test(bash)))) return { d: 'allow', why: 'accept-edits mode' };
@@ -55,6 +57,7 @@ function summarize(tool, input) {
   if (input.file_path) return input.file_path;
   if (input.notebook_path) return input.notebook_path;
   if (input.url) return input.url;
+  if (input.target) return input.target;
   if (input.query) return input.query;
   return JSON.stringify(input).slice(0, 200);
 }
