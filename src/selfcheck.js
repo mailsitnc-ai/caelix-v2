@@ -247,6 +247,14 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
       pass('an image file is described as text (size, colours, words) for models without vision', /Image size: \d+x\d+/.test(rd) && /GAME STARTED/.test(rd), rd.slice(0, 300));
       const du = shot ? await see.describeDataUrl('data:image/png;base64,' + fsv.readFileSync(shot).toString('base64')) : '';
       pass('an attached screenshot is turned into text the same way', /GAME STARTED/.test(du), du.slice(0, 200)); }
+    // ---- web search falls back when a source blocks or returns nothing (offline: stand-in sources) ----
+    { const sr = require('./engine/search');
+      const blocked = { name: 'A', run: async () => { throw new Error('bot check'); } }, empty = { name: 'B', run: async () => [] };
+      const good = { name: 'C', run: async () => [{ title: 'Real <b>result</b>', url: '//duckduckgo.com/l/?uddg=' + encodeURIComponent('https://example.org/page'), snippet: 'x &amp; y' }, { title: 'Ad', url: 'https://duckduckgo.com/y.js?ad_domain=z', snippet: '' }] };
+      const out = await sr.webSearch('hello', { only: [blocked, empty, good] });
+      pass('web search moves past a blocked or empty source, unwraps links and drops ads', /^Results from C:/.test(out) && out.includes('https://example.org/page') && out.includes('Real result') && out.includes('x & y') && !/\nAd\n/.test(out), out);
+      const none = await sr.webSearch('hello', { only: [blocked, empty] });
+      pass('web search says why when every source fails', /^Error: web search found nothing/.test(none) && /A: bot check; B: no results/.test(none), none); }
     // ---- team mode (coder + reviewer), images, auto-naming ----
     { const wfile = require('path').join(work, 'team-out.txt');
       const rtT = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'bypassPermissions', kind: 'code' }); rtT.team = true; rtT.coder = { provider: 'pretend', model: 'coder-x' }; rtT.reviewer = { provider: 'pretend', model: 'reviewer-y' };

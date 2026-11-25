@@ -1,5 +1,6 @@
 'use strict';
 const see = require('./see');
+const { webSearch } = require('./search');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -175,15 +176,7 @@ const IMPL = {
     const body = /html/.test(ct) ? html2text(t) : t;
     return `HTTP ${r.status}\n` + (body.length > 30000 ? body.slice(0, 30000) + '\n[truncated]' : body);
   },
-  async WebSearch(ctx, a) {
-    const r = await fetch('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(a.query), { headers: { 'User-Agent': 'Mozilla/5.0 CAELIX' }, signal: AbortSignal.timeout(20000) });
-    const h = await r.text(); const out = []; const re = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g; let m;
-    while ((m = re.exec(h)) && out.length < 8) {
-      let u = m[1]; const q = /uddg=([^&]+)/.exec(u); if (q) u = decodeURIComponent(q[1]);
-      out.push(`${html2text(m[2])}\n${u}\n${html2text(m[3])}`);
-    }
-    return out.length ? out.join('\n\n') : 'No results (search backend may be blocked).';
-  },
+  async WebSearch(ctx, a) { return webSearch(a.query, { signal: ctx.signal }); },
   async LookAtPage(ctx, a) { return see.lookAtPage({ ...a, cwd: ctx.cwd }); },
   async TodoWrite(ctx, a) { ctx.todos = a.todos || []; ctx.emit && ctx.emit({ type: 'todos', todos: ctx.todos }); return 'Task list updated.'; },
   async AskUserQuestion(ctx, a) { const ans = await ctx.ask({ kind: 'question', question: a.question, options: a.options || [] }); return 'User answered: ' + ans; },
