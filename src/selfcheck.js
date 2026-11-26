@@ -293,6 +293,7 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     await ev(`window.caelix.mcpToggle(${JSON.stringify(work)}, 'stub', 'project', true, false)`);
     pass('MCP: a server can be disabled', (await ev(`window.caelix.mcpList('', ${JSON.stringify(work)}, true)`)).find((e) => e.name === 'stub').disabled === true);
     await ev(`window.caelix.mcpRemove(${JSON.stringify(work)}, 'stub', 'project')`); pass('MCP: a server can be removed', !(await ev(`window.caelix.mcpList('', ${JSON.stringify(work)}, true)`)).some((e) => e.name === 'stub'));
+    delete process.env.ELECTRON_RUN_AS_NODE; // only the stub server needs it; windows opened later would crash with it set
     const bt = await engineTurn(work, 'bypassPermissions', [{ say: 'a', tools: [{ name: 'mcp__desktop__system_info', input: {} }, { name: 'mcp__desktop__git_summary', input: {} }, { name: 'mcp__memory__memory_save', input: { text: 'The user likes blue.' } }] }, { say: 'b', tools: [{ name: 'mcp__memory__memory_search', input: { query: 'blue' } }] }, { say: 'c' }]);
     const bo = bt.evs.filter((e) => e.type === 'tool_result').map((e) => e.output);
     pass('built-in desktop tools work', /Memory:/.test(bo[0]) && bo[1] !== undefined, (bo[0] || '').slice(0, 60));
@@ -335,7 +336,28 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
     pass('Code: New session asks for a folder again instead of reusing the last one', await ev(`window.S.kind==='code' && !window.S.draft.cwd && !document.querySelector('#new-folder').hidden && document.querySelector('#input').disabled`));
     await ev(`window.lazy('modals').then(()=>window.Modals.team())`); await until(`document.querySelector('.modal') && document.querySelector('.modal').innerText.includes('Team mode')`, 8000, 'team dialog');
     await ev(`document.querySelector('.modal input[type=checkbox]').click()`); await sleep(200);
-    pass('Team dialog asks for a coder and a reviewer model', await ev(`(()=>{const t=document.querySelector('.modal').innerText;return t.includes('Coder')&&t.includes('Reviewer')})()`)); await shot('32-team-dialog'); await ev(`document.querySelector('#modal-host').innerHTML=''`);
+    pass('Team dialog asks for a coder and a reviewer model', await ev(`(()=>{const t=document.querySelector('.modal').innerText;return t.includes('Coder')&&t.includes('Reviewer')})()`)); await shot('32-team-dialog');
+    { const pick = async (row, model) => { await ev(`document.querySelectorAll('.modal .teamrow')[${row}].querySelector('button').click()`); await until(`Array.from(document.querySelectorAll('.mpicker .mi .mn')).some(n=>n.textContent==='${model}')`, 8000, 'team model picker'); await ev(`Array.from(document.querySelectorAll('.mpicker .mi')).find(m=>m.querySelector('.mn').textContent==='${model}').click()`); await sleep(250); };
+      const rowText = (i) => ev(`(document.querySelectorAll('.modal .teamrow')[${i}]||{innerText:''}).innerText`);
+      await pick(1, 'auto/coding'); const first = await rowText(1);
+      pass('Team mode: choosing the first (coder) model keeps the dialog open and shows the choice', /omniroute \/ auto\/coding/.test(first), first);
+      await pick(2, 'auto/smart'); const second = await rowText(2);
+      pass('Team mode: the second (reviewer) model can be chosen too', /omniroute \/ auto\/smart/.test(second), second); await shot('32b-team-chosen');
+      await ev(`Array.from(document.querySelectorAll('.modal footer button')).find(b=>b.textContent==='Save').click()`); await sleep(300);
+      pass('Team mode: Save keeps both models', await ev(`(()=>{const c=window.S.cur||window.S.draft;return !!c.team && c.coder.model==='auto/coding' && c.reviewer.model==='auto/smart' && !document.querySelector('.modal') && !document.querySelector('.mpicker')})()`)); }
+    // ---- several windows, each working on its own task ----
+    { const { BrowserWindow } = require('electron'); const appWins = () => BrowserWindow.getAllWindows().filter((w) => /renderer\/index\.html/.test(w.webContents.getURL()));
+      const before = appWins(); await click('#btn-window'); for (let i = 0; i < 60 && appWins().length < before.length + 1; i++) await sleep(100);
+      await ev(`window.caelix.newWindow()`); for (let i = 0; i < 80 && (appWins().length < before.length + 2 || appWins().some((w) => w.webContents.isLoading())); i++) await sleep(100); await sleep(700);
+      const extra = appWins().filter((w) => !before.includes(w));
+      pass('windows: the button opens a new window, as many times as wanted', extra.length === 2, 'extra windows: ' + extra.length);
+      if (extra.length === 2) {
+        const run = (w, word) => w.webContents.executeJavaScript(`(async()=>{ const got=[]; window.caelix.onEvent(x=>got.push(x)); const s=await window.caelix.newSession({provider:'pretend',model:'pretend-1',kind:'chat'}); await window.caelix.send(s.meta.id,'hello from ${word}'); for(let i=0;i<150;i++){ await new Promise(r=>setTimeout(r,50)); if(got.some(g=>g.sid===s.meta.id&&g.e.type==='idle')) break; } const o=await window.caelix.openSession(s.meta.id); return o.items.filter(i=>i.type==='assistant').map(i=>i.text).join(' '); })()`, true);
+        const [a, b] = await Promise.all([run(extra[0], 'window-one'), run(extra[1], 'window-two')]);
+        pass('windows: two windows work on different tasks at the same time', /window-one/.test(a) && /window-two/.test(b), a + ' | ' + b);
+        extra.forEach((w) => w.close()); await sleep(400);
+        pass('windows: closing the extra windows leaves the first one running', appWins().length === before.length && (await ev('!!window.S')));
+      } }
     // ---- updater ----
     { const upd = require('./updater'); const fsx = require('fs'), pth = require('path'), osx = require('os'), cp = require('child_process');
       const mk = (name, files) => { const d = fsx.mkdtempSync(pth.join(osx.tmpdir(), 'upd-src-')); const top = pth.join(d, 'caelix-x'); for (const [f, c] of Object.entries(files)) { fsx.mkdirSync(pth.dirname(pth.join(top, f)), { recursive: true }); fsx.writeFileSync(pth.join(top, f), c); } const tarf = pth.join(d, name + '.tar.gz'); cp.execFileSync('tar', ['-czf', tarf, '-C', d, 'caelix-x']); return tarf; };

@@ -20,6 +20,11 @@ else {
 if (SELF) { try { fs.rmSync(app.getPath('userData'), { recursive: true, force: true }); } catch (_) {} }
 
 let win = null; const timing = { boot: BOOT };
+const wins = new Set(); // every app window; `win` is the one used last
+// One CAELIX process owns the data. Starting the app again just opens another window in it.
+const ONLY = !SELF && !process.argv.includes('--probe');
+if (ONLY && !app.requestSingleInstanceLock()) app.exit(0);
+app.on('second-instance', () => { if (app.isReady()) createWindow(); });
 const live = new Map(); // sessionId -> live state
 let keys, store, engine = null;
 const CHAT_DIR = SELF ? path.join(require('os').tmpdir(), 'caelix-selfcheck-chats') : path.join(app.getPath('documents'), 'CAELIX Chats');
@@ -33,7 +38,7 @@ const userDir = () => app.getPath('userData');
 const provFile = () => path.join(userDir(), 'providers.json');
 const readProv = () => { try { return JSON.parse(fs.readFileSync(provFile(), 'utf8')); } catch (_) { return { bases: {}, last: {} }; } };
 const writeProv = (o) => { fs.mkdirSync(userDir(), { recursive: true }); fs.writeFileSync(provFile(), JSON.stringify(o)); };
-const send = (ch, payload) => { if (win && !win.isDestroyed()) win.webContents.send(ch, payload); };
+const send = (ch, payload) => { for (const w of wins) if (!w.isDestroyed()) w.webContents.send(ch, payload); };
 
 // ---------- sessions ----------
 function serSnap(m) { return Array.from(m.entries()); }
@@ -131,7 +136,7 @@ function registerIpc() {
   handle('models:list', async (pid, force) => { const { providers } = E(); return providers.listModels(pid, keys.get(pid), readProv().bases, { force }); });
   handle('models:archive', () => { initStores(); return E().providers.getArchive(); });
   handle('models:unarchive', (pid, id) => { initStores(); E().providers.unarchive(pid, id); return E().providers.getArchive(); });
-  handle('models:probe', async (pid) => { initStores(); const { providers } = E(); return providers.probeModels(pid, keys.get(pid), readProv().bases, { onProgress: (d, n) => win && win.webContents.send('probe:progress', { pid, d, n }) }); });
+  handle('models:probe', async (pid) => { initStores(); const { providers } = E(); return providers.probeModels(pid, keys.get(pid), readProv().bases, { onProgress: (d, n) => send('probe:progress', { pid, d, n }) }); });
   handle('update:info', () => require('./src/updater').current());
   handle('update:check', async () => { const r = await require('./src/updater').check(); lastUpdate = r; return r; });
   handle('update:apply', async (force) => {
@@ -187,7 +192,7 @@ function registerIpc() {
         E().agent.makeTitle(L.rt, env, text, E().agent.textOf(lastA.content)).then((t) => { if (L.meta.autoTitle && t) { L.meta.title = t; L.meta.autoTitle = false; saveSession(L); send('sessions-changed', 1); send('title', { sid, title: t }); } }).catch(() => {});
       }
       send('evt', { sid, e: { type: 'idle', ctx: E().agent.estTokens(L.rt.messages), ctxLimit: L.rt.ctxLimit, usage: L.rt.usage, breakdown: E().agent.breakdown(L.rt.messages), checkpoints: L.rt.checkpoints.map((c) => ({ turn: c.turn, prompt: c.prompt })) } });
-      if (win && !win.isFocused() && Notification.isSupported() && !SELF) new Notification({ title: 'CAELIX', body: (L.meta.title || 'Session') + ' finished' }).show();
+      if (![...wins].some((w) => !w.isDestroyed() && w.isFocused()) && Notification.isSupported() && !SELF) new Notification({ title: 'CAELIX', body: (L.meta.title || 'Session') + ' finished' }).show();
     })();
     return true;
   });
@@ -295,6 +300,7 @@ function registerIpc() {
 
   ipcMain.on('ui-ready', () => { timing.uiReady = Date.now() - BOOT; });
   handle('timing', () => timing);
+  handle('window:new', () => { createWindow(); return wins.size; });
   handle('selfcheck:report', (r) => { global.__selfcheckRenderer = r; return true; });
 }
 
@@ -302,6 +308,7 @@ let lastUpdate = null;
 function buildMenu() {
   const t = [
     { label: 'CAELIX', submenu: [{ role: 'about', label: 'About CAELIX' }, { label: 'Check for Updates…', click: () => win && win.webContents.send('open-updates') }, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide', label: 'Hide CAELIX' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit', label: 'Quit CAELIX' }] },
+    { label: 'File', submenu: [{ label: 'New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => createWindow() }] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
     { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'close' }] },
@@ -310,15 +317,19 @@ function buildMenu() {
 }
 
 function createWindow() {
-  win = new BrowserWindow({
-    width: 1408, height: 881, minWidth: 900, minHeight: 600, show: false, title: 'CAELIX', icon: ICON,
+  const from = win && !win.isDestroyed() ? win.getBounds() : null;
+  const w = new BrowserWindow({
+    width: from ? from.width : 1408, height: from ? from.height : 881, ...(from ? { x: from.x + 28, y: from.y + 28 } : {}), minWidth: 900, minHeight: 600, show: false, title: 'CAELIX', icon: ICON,
     titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 17 }, backgroundColor: '#05070d',
     webPreferences: { preload: path.join(ROOT, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
   });
-  win.once('ready-to-show', () => { timing.windowShown = Date.now() - BOOT; win.show(); });
-  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
-  win.loadFile(path.join(ROOT, 'renderer', 'index.html'));
-  win.on('closed', () => { win = null; });
+  wins.add(w); win = w;
+  w.once('ready-to-show', () => { if (!timing.windowShown) timing.windowShown = Date.now() - BOOT; w.show(); });
+  w.on('focus', () => { win = w; });
+  w.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  w.loadFile(path.join(ROOT, 'renderer', 'index.html'));
+  w.on('closed', () => { wins.delete(w); if (win === w) win = [...wins].pop() || null; });
+  return w;
 }
 
 app.whenReady().then(() => {
@@ -340,12 +351,13 @@ app.whenReady().then(() => {
     return;
   }
   buildMenu(); registerIpc(); createWindow();
+  if (process.platform === 'darwin' && app.dock) app.dock.setMenu(Menu.buildFromTemplate([{ label: 'New Window', click: () => createWindow() }]));
   if (!SELF && app.isPackaged) { // quietly look for updates a few seconds after start, then every 4 hours
     const probe = () => require('./src/updater').check().then((r) => { lastUpdate = r; if (r.available) send('update:status', r); }).catch(() => {});
     setTimeout(probe, 6000); setInterval(probe, 4 * 3600e3);
   }
   if (SELF) require('./src/selfcheck').run({ app, getWin: () => win, timing, ROOT, userDir, keys, live });
-  app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
+  app.on('activate', () => { if (!wins.size) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' || SELF) app.quit(); });
 app.on('before-quit', () => { for (const L of live.values()) { try { if (L.ctrl) L.ctrl.abort(); saveSession(L); } catch (_) {} } for (const c of mcpPool.values()) Promise.resolve(c).then((x) => x && x.stop && x.stop()).catch(() => {}); });

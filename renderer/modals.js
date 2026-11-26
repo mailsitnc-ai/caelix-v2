@@ -42,7 +42,7 @@
 
   // ---------- Model picker ----------
   async function modelPicker(anchor, onPick) {
-    window.closePop && window.closePop(); host().innerHTML = ''; document.querySelectorAll('.mpicker').forEach((n) => n.remove());
+    window.closePop && window.closePop(); if (!onPick) host().innerHTML = ''; document.querySelectorAll('.mpicker').forEach((n) => n.remove()); // with onPick the picker sits on top of a dialog, which must stay open
     const pop = el('div', 'popup mpicker'); pop.style.position = 'fixed'; if (onPick) pop.style.zIndex = '500'; const top = el('div', 'mtop'); const inp = el('input'); inp.placeholder = 'Search models'; const refresh = el('button', null, 'Refresh'); top.append(inp, refresh); const list = el('div', 'mlist'); pop.append(top, list); document.body.appendChild(pop);
     const a = (anchor || $('#chip-model')).getBoundingClientRect(); const wide = Math.min(580, innerWidth - 20); pop.style.width = wide + 'px'; pop.style.left = Math.max(10, Math.min(a.left, innerWidth - wide - 10)) + 'px';
     if (a.top > innerHeight / 2) pop.style.bottom = (innerHeight - a.top + 8) + 'px'; else pop.style.top = a.bottom + 8 + 'px';
@@ -246,7 +246,8 @@
         r.append(el('div', 'tl', lab), el('div', 'tm', v ? `${v.provider} / ${v.model}` : 'Not chosen yet'), b); body.appendChild(r);
       }
     }
-    draw(); dialog('Team mode', 'Pick one model to write code and a different one to review it.', body, [btn('Cancel', '', () => (host().innerHTML = '')), btn('Save', 'pri', async () => { if (await save()) host().innerHTML = ''; })], { width: '620px' });
+    const done = () => { host().innerHTML = ''; document.querySelectorAll('.mpicker').forEach((n) => n.remove()); };
+    draw(); dialog('Team mode', 'Pick one model to write code and a different one to review it.', body, [btn('Cancel', '', done), btn('Save', 'pri', async () => { if (await save()) done(); })], { width: '620px', onClose: () => document.querySelectorAll('.mpicker').forEach((n) => n.remove()) });
   }
   window.Modals = { updates, askText, team, keys, modelPicker, mcp, hooks, memory, system, permission, rewind, side, sideAppend, settings, help };
 })();

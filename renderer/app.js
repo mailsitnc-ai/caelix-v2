@@ -316,6 +316,7 @@
   function modeMenu(anchor) { if (!isCode()) return; popMenu(anchor || $('#chip-mode'), MODES.map(([id, label, desc]) => [label, () => setMode(id), { desc, cur: curMode() === id }])); }
   async function setMode(id) { if (S.cur) { await api.setSession(S.cur.id, { mode: id }); S.cur.mode = id; } else S.draft.mode = id; api.setLast({ mode: id }); updateChips(); }
   $('#chip-mode').onclick = (e) => modeMenu(e.currentTarget); $('#chip-mode-top').onclick = (e) => modeMenu(e.currentTarget);
+  $('#btn-window').onclick = () => api.newWindow();
   $('#chip-team').onclick = () => window.lazy('modals').then(() => window.Modals.team());
   const _oldTeam = async () => { const v = !curTeam(); if (S.cur) { await api.setSession(S.cur.id, { team: v }); S.cur.team = v; } else S.draft.team = v; updateChips(); toast(v ? 'Team mode on: work is split across sub-agents' : 'Team mode off'); };
   function effortMenu(anchor) { popMenu(anchor || $('#chip-model'), EFFORTS.map(([id, l]) => [l, async () => { if (S.cur) { await api.setSession(S.cur.id, { effort: id }); S.cur.effort = id; } else S.draft.effort = id; toast('Effort: ' + l); }, { cur: eff() === id }])); }

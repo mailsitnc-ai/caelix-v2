@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('caelix', {
   getSettings: inv('settings:get'), setSettings: inv('settings:set'), skills: inv('skills:list'),
   resetChat: inv('chat:reset'), mcpList: inv('mcp:list'), mcpAdd: inv('mcp:add'), mcpRemove: inv('mcp:remove'), mcpToggle: inv('mcp:toggle'), mcpImport: inv('mcp:import'), hooksList: inv('hooks:list'), hooksAdd: inv('hooks:add'), hooksRemove: inv('hooks:remove'), hooksToggle: inv('hooks:toggle'), memoryInfo: inv('memory:info'), agents: inv('agents:list'), favs: inv('fav:get'), toggleFav: inv('fav:toggle'), openDocs: inv('docs:open'), systemPrompt: inv('prompt:system'),
   termRun: inv('term:run'), termKill: inv('term:kill'), timing: inv('timing'),
+  newWindow: inv('window:new'),
   uiReady: () => ipcRenderer.send('ui-ready'),
   onEvent: (cb) => on('evt', cb), onTerm: (cb) => on('term', cb), onSessionsChanged: (cb) => on('sessions-changed', cb), onTitle: (cb) => on('title', cb), updInfo: inv('update:info'), updCheck: inv('update:check'), updApply: inv('update:apply'), onUpdateStatus: (cb) => on('update:status', cb), onUpdateProgress: (cb) => on('update:progress', cb), onOpenUpdates: (cb) => on('open-updates', cb),
 });
