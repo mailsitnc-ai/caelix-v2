@@ -233,6 +233,24 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
       await engineTurn(work, 'bypassPermissions', [rd, { say: 'gave up' }], { rt: rtS }); await engineTurn(work, 'bypassPermissions', [rd, { say: 'gave up' }], { rt: rtS });
       const users = rtS.messages.filter((m) => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('go PRETEND'));
       pass('same prompt sent again: the model is told the earlier attempt failed and to take a different approach', users.length === 2 && !/CAELIX note/.test(users[0].content) && /same request again/.test(users[1].content) && /still-missing/.test(users[1].content), users.length + ' | ' + String(users[1] && users[1].content).slice(-260)); }
+    // ---- runaway replies: endless repetition and made-up tool output ----
+    { const guard = require('./engine/guard');
+      const card = (n) => `B\nBash\ncd "/tmp/x" && echo "=== ${n}. CAPTURE SCREENSHOT ===" && echo "From macOS host: save to Desktop"\nDone\nDetails\nOmniRoute → CoArena / m\n✦\nCAELIX\nCopy\n`;
+      const looped = 'Here is the plan.\n' + 'Open the app and take a screenshot of the window.\nThen save it to the Desktop folder for later.\n'.repeat(60);
+      pass('runaway guard: spots a block repeated over and over, and made-up action cards', guard.check(looped).guard === 'loop' && guard.check('Sure.\n' + card(1)).guard === 'fake' && guard.check('word and word '.repeat(300)).guard === 'loop');
+      const fine = ['| a | b |\n|---|---|\n' + Array.from({ length: 60 }, (_, i) => `| row ${i} | value ${i * 3} |`).join('\n'), '```\n' + card(1) + '```\n', 'function a() {\n  return 1;\n}\n'.repeat(3), '-'.repeat(4000)];
+      pass('runaway guard: leaves tables, quoted logs in code blocks and ordinary code alone', fine.every((x) => !guard.check(x)), JSON.stringify(fine.map((x) => guard.check(x))));
+      const lt = await engineTurn(work, 'bypassPermissions', [{ say: looped.repeat(4) }, { say: 'Short answer instead.' }]);
+      const kept = lt.rt.messages.find((m) => m.role === 'assistant').content;
+      const rep = lt.evs.find((e) => e.type === 'text_replace');
+      pass('runaway guard: a looping reply is cut while streaming, replaced on screen, and the model is asked again once', kept.length < 600 && rep && rep.text === kept && (lt.evs.filter((e) => e.type === 'stop').pop() || {}).reason === 'finished' && lt.evs.some((e) => e.type === 'info' && /repeating itself/.test(e.text)), kept.length + ' chars; ' + JSON.stringify(lt.evs.filter((e) => e.type === 'info' || e.type === 'stop')));
+      const chatRt = newRuntime({ provider: 'pretend', model: 'pretend-1', cwd: work, mode: 'auto', kind: 'chat' });
+      const ft = await engineTurn(work, 'auto', [{ say: 'Running it.\n' + card(1) + card(2) }, { say: 'Again.\n' + card(3) }, { say: 'never reached' }], { rt: chatRt, kind: 'chat' });
+      const fstop = ft.evs.filter((e) => e.type === 'stop').pop() || {};
+      pass('runaway guard: a Chat reply that fakes terminal actions is cut, and the turn stops with a clear reason if it happens again', fstop.reason === 'stuck' && /nothing was run/.test(fstop.detail) && !chatRt.messages.some((m) => m.role === 'assistant' && /CAPTURE/.test(m.content || '')), JSON.stringify(fstop));
+      const old = [{ role: 'user', content: 'Check this\n' + card(7).repeat(20) }, { role: 'assistant', content: 'ok\n' + card(7).repeat(20) }, { role: 'assistant', content: null }];
+      const clean = guard.sanitize(old);
+      pass('runaway guard: old junk in a saved chat is cleaned from what the model sees, without changing the chat', clean[0].content.length < 700 && !/\nDone\nDetails/.test(clean[0].content) && /pasted record/.test(clean[0].content) && !/CAPTURE/.test(clean[1].content) && clean[2].content === '(empty reply)' && /CAPTURE/.test(old[1].content) && old[2].content === null, JSON.stringify(clean).slice(0, 600)); }
     // ---- seeing without a vision model: render pages and read images as text ----
     { const fsv = require('fs'), pthv = require('path'); const see = require('./engine/see');
       fsv.writeFileSync(pthv.join(work, 'look.html'), '<!doctype html><title>Look test</title><body style="margin:0;background:#101830;color:#fff;font:32px sans-serif"><h1>PIXEL SCORE BOARD</h1><button id="go" onclick="document.querySelector(\'h1\').textContent=\'GAME STARTED\'">Start</button><canvas width="300" height="200" style="display:block"></canvas><img src="missing.png" alt="hero"><script>undefinedThing()</script></body>');

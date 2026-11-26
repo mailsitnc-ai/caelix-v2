@@ -218,7 +218,8 @@
       case 'turn_start': setBusy(true); break;
       case 'text_start': startAssistant(); break;
       case 'text': if (!S.curText) startAssistant(); S.curBuf += e.delta; S.curText._raw = S.curBuf; S.curText.querySelector('.body').innerHTML = md.render(S.curBuf); stick(); break;
-      case 'text_end': S.items.push({ type: 'assistant', text: S.curBuf }); S.curText = null; break;
+      case 'text_replace': if (S.curText) { S.curBuf = e.text; S.curText._raw = e.text; S.curText.querySelector('.body').innerHTML = md.render(e.text); } break;
+      case 'text_end': if (S.curBuf.trim()) S.items.push({ type: 'assistant', text: S.curBuf }); else if (S.curText) S.curText.remove(); S.curText = null; break;
       case 'thinking': { let t = tr().lastChild; if (!t || !t.classList || !t.classList.contains('thinking-only')) { t = el('div', 'thinking thinking-only'); tr().appendChild(t); } t.textContent += e.delta; break; }
       case 'tool_start': addTool(e); S.items.push({ type: 'tool', ...e }); stick(); break;
       case 'tool_result': { finishTool(e.id, e); const it = [...S.items].reverse().find((x) => x.type === 'tool' && x.id === e.id); if (it) Object.assign(it, { output: e.output, error: e.error }); stick(); break; }

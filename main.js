@@ -69,6 +69,7 @@ function record(L, e) {
     case 'turn_start': L.turnT0 = Date.now(); L.stopInfo = null; break;
     case 'stop': L.stopInfo = { reason: e.reason, detail: e.detail }; if (e.reason !== 'finished' && e.reason !== 'stopped') L.items.push({ type: 'info', text: 'Why it stopped: ' + e.detail }); break;
     case 'text': L.assistantBuf += e.delta; break;
+    case 'text_replace': L.assistantBuf = e.text; break;
     case 'text_end': if (L.assistantBuf.trim()) L.items.push({ type: 'assistant', text: L.assistantBuf }); L.assistantBuf = ''; break;
     case 'tool_start': L.items.push({ type: 'tool', id: e.id, name: e.name, input: e.input, summary: e.summary }); break;
     case 'tool_result': { const it = [...L.items].reverse().find((x) => x.type === 'tool' && x.id === e.id); if (it) { it.output = e.output; it.error = e.error; it.ms = e.ms; } break; }

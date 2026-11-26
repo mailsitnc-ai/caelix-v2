@@ -110,7 +110,7 @@ async function streamChat({ provider, key, base, model, messages, tools, signal,
   const out = { text: '', toolCalls: [], finish: null, usage: null };
   const calls = [];
   const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
-  for (;;) {
+  try { for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += dec.decode(value, { stream: true });
@@ -135,7 +135,7 @@ async function streamChat({ provider, key, base, model, messages, tools, signal,
       }
       if (ch.finish_reason) out.finish = ch.finish_reason;
     }
-  }
+  } } finally { reader.cancel().catch(() => {}); } // also closes the connection when a reply is cut off early
   out.toolCalls = calls.filter(Boolean).map((c, n) => ({ id: c.id || 'call_' + Date.now().toString(36) + n, name: c.name, args: c.args || '{}' }));
   return out;
 }
@@ -147,6 +147,7 @@ function setHealthFile(f) { healthFile = f; try { const j = JSON.parse(require('
 function saveHealth() { if (!healthFile) return; try { require('fs').writeFileSync(healthFile, JSON.stringify(Object.fromEntries(health))); } catch (_) {} }
 const hkey = (p, m) => p + '/' + m;
 function isBenched(p, m) { if (isArchived(p, m)) return true; const h = health.get(hkey(p, m)); if (!h) return false; if (h.until <= Date.now()) { health.delete(hkey(p, m)); return false; } return true; }
+function bench(p, m, minutes, why) { health.set(hkey(p, m), { until: Date.now() + minutes * 60000, why }); for (const [k, v] of sticky) if (v.provider === p && v.model === m) sticky.delete(k); saveHealth(); }
 function markFailed(p, m, err) {
   const s = err && err.status; const msg = String((err && err.message) || '');
   // 404 / 401 / 403 / 402 / 400: this model will not work for this account right now -> long rest. 429 / 5xx / network: short rest.
@@ -234,4 +235,4 @@ function routeCandidates(objective, byProvider) {
   return list.sort((a, b) => b.s - a.s);
 }
 
-module.exports = { isClaudeArchived, setArchiveFile, getArchive, isArchived, unarchive, probeModels, setHealthFile, isBenched, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };
+module.exports = { isClaudeArchived, setArchiveFile, getArchive, isArchived, unarchive, probeModels, setHealthFile, isBenched, bench, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };

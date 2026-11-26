@@ -1,5 +1,6 @@
 'use strict';
 const see = require('./see');
+const guard = require('./guard');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -30,10 +31,12 @@ function buildSystem(rt, env) {
     'You are CAELIX in Chat mode: a helpful, direct assistant. There is no project folder in this mode and you cannot read or change the user\'s files or run shell commands.',
     'You can browse the web, keep a checklist, ask the user a question, use saved memory, and create documents (md, txt, html, pdf) with WriteDocument; they are saved in the user\'s CAELIX Chats folder.',
     'If the user wants code changed in a project, tell them to switch to Code mode and open the folder.',
+    'Never write tool calls, terminal commands with results, or "Done" action logs as if you ran them: you cannot run anything here. If the user pastes output from Code mode, read it, say what it shows, and give the next step in plain words or as one prompt they can paste back.',
     `Date: ${new Date().toISOString().slice(0, 10)}`,
   ] : [
     'You are CAELIX in Code mode, a coding agent running on the user\'s computer. You work inside the project folder using tools.',
     'Be direct and brief. Read before you edit. Prefer small exact edits. Run independent tool calls together in one reply.',
+    'Only real tool calls run anything. Never type out tool calls or their results as text, even if the user pasted a log that looks like that.',
     'Never claim something works unless a tool result shows it. When a task needs several steps, keep a checklist with TodoWrite.',
     'You can see what you build even without vision: after creating or changing a web page, game or any visual output, call LookAtPage on it, fix every error and layout problem it reports, and look again before saying it works. Read also works on image files and screenshots.',
     'Finish the whole job in one go. If a tool fails, read the error, change your approach and try again; do not stop at the first failure and do not hand back a partial result. Stop only when every checklist item is completed, or when you are truly blocked: then say exactly what blocks you and what you need from the user.',
@@ -67,7 +70,7 @@ async function routeAcross(objective, env, args, onText) {
       try {
         const out = await providers.streamChat({ ...args, onText: (t) => { started = true; onText && onText(t); }, provider: cand.provider, key: cr.key, base: cr.base, model: cand.model });
         providers.markOk(cand.provider, cand.model); providers.sticky.set(obj, { provider: cand.provider, model: cand.model }); return out;
-      } catch (e) { if (e.name === 'AbortError' || started) throw e; lastErr = e; providers.markFailed(cand.provider, cand.model, e); env.emit({ type: 'route_fail', provider: cand.provider, model: cand.model, error: String(e.message).slice(0, 160) }); }
+      } catch (e) { if (e.name === 'AbortError' || e.guard || started) throw e; lastErr = e; providers.markFailed(cand.provider, cand.model, e); env.emit({ type: 'route_fail', provider: cand.provider, model: cand.model, error: String(e.message).slice(0, 160) }); }
     }
   }
   if (!attempts) throw new Error('OmniRoute has no connected providers yet. Add a key on the Keys screen.');
@@ -75,7 +78,7 @@ async function routeAcross(objective, env, args, onText) {
 }
 
 async function callModel(rt, env, messages, tools, onText, onThinking) {
-  messages = prepareMessages(messages);
+  messages = guard.sanitize(prepareMessages(messages));
   const hasImages = messages.some((m) => Array.isArray(m.content) && m.content.some((x) => x.type === 'image_url'));
   if (hasImages && rt.provider !== 'pretend') {
     const sees = rt.provider !== 'omniroute' && SEES_IMAGES.test(rt.model || '');
@@ -117,7 +120,7 @@ async function callModelWith(rt, env, messages, tools, onText, onThinking) {
     if (c.base) { // a self-hosted OmniRoute: use it first, and keep going through the connected providers if it fails
       let started = false;
       try { return await providers.streamChat({ ...args, onText: (t) => { started = true; onText && onText(t); }, provider: 'omniroute', key: c.key, base: c.base, model: rt.model }); }
-      catch (e) { if (e.name === 'AbortError' || started || !env.connected().length) throw e; env.emit({ type: 'route_fail', provider: 'omniroute', model: rt.model, error: String(e.message).slice(0, 160) }); }
+      catch (e) { if (e.name === 'AbortError' || e.guard || started || !env.connected().length) throw e; env.emit({ type: 'route_fail', provider: 'omniroute', model: rt.model, error: String(e.message).slice(0, 160) }); }
     }
     return routeAcross(rt.model, env, args, onText);
   }
@@ -165,8 +168,9 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
       messages = rt.messages;
     }
     const msgId = 'm' + Date.now().toString(36) + iter; let started = false;
-    const r = await callModelRetry(rt, env, messages, tools, (t) => { if (depth === 0) { if (!started) { started = true; env.emit({ type: 'text_start', id: msgId }); } env.emit({ type: 'text', id: msgId, delta: t }); } },
+    const r = await callGuarded(rt, env, messages, tools, (t) => { if (depth === 0) { if (!started) { started = true; env.emit({ type: 'text_start', id: msgId }); } env.emit({ type: 'text', id: msgId, delta: t }); } },
       (t) => depth === 0 && env.emit({ type: 'thinking', delta: t }));
+    if (r.guard && depth === 0 && started) env.emit({ type: 'text_replace', id: msgId, text: r.text });
     if (r.usage) { rt.usage.in += r.usage.in; rt.usage.out += r.usage.out; }
     messages.push({ role: 'assistant', content: r.text || null, ...(r.toolCalls.length ? { tool_calls: r.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.args } })) } : {}) });
     if (depth === 0) { env.emit({ type: 'text_end', id: msgId }); env.emit({ type: 'context', used: estTokens(messages), limit: rt.ctxLimit || 2000000, usage: rt.usage, breakdown: breakdown(messages) }); }
@@ -175,6 +179,17 @@ async function loop(rt, env, { messages, tools, depth, readOnly }) {
       if (norm.length > 30 && norm === lastText) sameText++; else sameText = 0;
       lastText = norm;
       if (sameText >= 2) { env.emit({ type: 'stop', reason: 'stuck', detail: 'The model repeated the same reply three times in a row, so CAELIX stopped it. Change the request, pick another model, or give more detail.' }); return final || r.text; }
+    }
+    if (r.guard && !r.toolCalls.length) {
+      final = r.text;
+      if (depth > 0) break;
+      const what = r.guard === 'fake' ? 'typed out tool actions as text (nothing was run)' : 'got stuck repeating itself';
+      if (++rt.guardHits <= 1) {
+        env.emit({ type: 'info', text: `The model ${what}, so CAELIX cut the reply and is asking again.` });
+        messages.push({ role: 'user', content: NUDGE_TAG + (r.guard === 'loop' ? 'Your reply started repeating itself and was cut. Answer again, briefly, without repeating anything.' : rt.kind === 'chat' ? 'You typed out a made-up action log. Nothing ran: Chat mode cannot run commands. Answer the user in plain, short words. Do not write commands as if you ran them.' : 'You typed out tool actions as text, so nothing ran. Make real tool calls, one step at a time, or say plainly what blocks you.') });
+        continue;
+      }
+      env.emit({ type: 'stop', reason: 'stuck', detail: `Stopped: the model ${what} twice. Pick another model, then send your request again.` }); return final;
     }
     if (!r.toolCalls.length) {
       final = r.text;
@@ -257,6 +272,25 @@ function stopCheck(rt, st, r, lastFailed) {
   return { reason: 'finished', detail: 'The model said it was done.' };
 }
 
+// Watches a reply as it streams, and cuts it off the moment it starts looping or inventing tool output.
+async function callGuarded(rt, env, messages, tools, onText, onThinking) {
+  let text = ''; let thought = ''; let seenText = 0; let seenThought = 0; let route = null;
+  const trip = (hit) => Object.assign(new Error('runaway reply'), hit);
+  const watched = { ...env, emit: (e) => { if (e.type === 'route') route = e; env.emit(e); } };
+  const cut = (hit) => {
+    if (rt.provider === 'omniroute' && route) providers.bench(route.provider, route.model, 30, 'runaway reply'); // the next try goes to a different model
+    return { text: text.slice(0, hit.cut).trim(), toolCalls: [], finish: 'stop', usage: null, guard: hit.guard };
+  };
+  try {
+    const r = await callModelRetry(rt, watched, messages, tools,
+      (t) => { text += t; onText && onText(t); if (text.length - seenText >= 200) { seenText = text.length; const hit = guard.check(text); if (hit) throw trip(hit); } },
+      (t) => { thought += t; onThinking && onThinking(t); if (thought.length - seenThought >= 600) { seenThought = thought.length; const hit = guard.check(thought, { thinking: true }); if (hit) throw trip(hit); } });
+    const hit = r.text ? guard.check(r.text) : null;
+    if (!hit) return r;
+    text = r.text; return r.toolCalls.length ? { ...r, text: text.slice(0, hit.cut).trim(), guard: hit.guard } : cut(hit);
+  } catch (e) { if (!e.guard) throw e; return cut(e); }
+}
+
 async function callModelRetry(rt, env, messages, tools, onText, onThinking) {
   let tries = 0;
   for (;;) {
@@ -264,7 +298,7 @@ async function callModelRetry(rt, env, messages, tools, onText, onThinking) {
     try { return await callModel(rt, env, messages, tools, (t) => { started = true; onText && onText(t); }, onThinking); }
     catch (e) {
       const transient = !e.status || e.status === 429 || e.status >= 500;
-      if (e.name === 'AbortError' || started || !transient || ++tries > 2 || (rt.provider === 'pretend')) throw e;
+      if (e.name === 'AbortError' || e.guard || started || !transient || ++tries > 2 || (rt.provider === 'pretend')) throw e;
       env.emit({ type: 'info', text: 'Model call failed (' + String(e.message).slice(0, 100) + '); retrying…' });
       await new Promise((res) => setTimeout(res, 2000 * tries));
     }
@@ -287,7 +321,7 @@ async function runTurn(rt, env, userText, images) {
       env.emit({ type: 'subagent', phase: 'end', description: a.description || '' }); return out || '(no report)';
     },
   });
-  rt.turnSnap = new Map(); rt.turn = (rt.turn || 0) + 1; rt.nudges = 0;
+  rt.turnSnap = new Map(); rt.turn = (rt.turn || 0) + 1; rt.nudges = 0; rt.guardHits = 0;
   const ups = await config.runHooks(env.settings, 'UserPromptSubmit', { prompt: userText }, st.cwd);
   if (ups.blocked) { env.emit({ type: 'error', message: 'Prompt blocked by hook: ' + ups.reason }); return; }
   if (!rt.messages.length) rt.messages.push({ role: 'system', content: buildSystem(rt, env) }); else rt.messages[0] = { role: 'system', content: buildSystem(rt, env) };
