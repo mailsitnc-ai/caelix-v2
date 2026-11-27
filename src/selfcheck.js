@@ -251,6 +251,20 @@ exports.run = async function run({ app, getWin, timing, ROOT, userDir, keys, liv
       const old = [{ role: 'user', content: 'Check this\n' + card(7).repeat(20) }, { role: 'assistant', content: 'ok\n' + card(7).repeat(20) }, { role: 'assistant', content: null }];
       const clean = guard.sanitize(old);
       pass('runaway guard: old junk in a saved chat is cleaned from what the model sees, without changing the chat', clean[0].content.length < 700 && !/\nDone\nDetails/.test(clean[0].content) && /pasted record/.test(clean[0].content) && !/CAPTURE/.test(clean[1].content) && clean[2].content === '(empty reply)' && /CAPTURE/.test(old[1].content) && old[2].content === null, JSON.stringify(clean).slice(0, 600)); }
+    // ---- stop really stops, and keyless routing only offers free models ----
+    { const kept = [{ id: 'a/b:free' }, { id: 'x-free' }, { id: 'paid/model' }, { id: 'priced', free: true }, { id: 'google/lyria-3', free: true }].filter(providers.usableWithoutKey).map((m) => m.id);
+      pass('OmniRoute: with no key, only free chat models are tried', kept.join(',') === 'a/b:free,x-free,priced', kept.join(','));
+      if (process.platform !== 'win32') {
+        const { IMPL, tasks } = require('./engine/tools'); const pidF = require('path').join(work, 'child.pid'); const ac = new AbortController();
+        const alive = () => { try { process.kill(Number(require('fs').readFileSync(pidF, 'utf8')), 0); return true; } catch (_) { return false; } };
+        const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+        const cmd = `sleep 30 & echo $! > "${pidF}"; wait`;
+        const t0 = Date.now(); const run = IMPL.Bash({ cwd: work, signal: ac.signal }, { command: cmd }); await nap(800); const before = alive(); ac.abort(); await run; await nap(300);
+        pass('Stop ends a running command and everything it started', before && !alive() && Date.now() - t0 < 10000, `before ${before}, alive after ${alive()}, ${Date.now() - t0} ms`);
+        require('fs').unlinkSync(pidF);
+        const started = await IMPL.Bash({ cwd: work }, { command: cmd, run_in_background: true }); const id = /bg\d+/.exec(started)[0]; await nap(800); const up = alive(); await IMPL.TaskStop({}, { task_id: id }); await nap(300);
+        pass('stopping a background task ends everything it started', up && !alive() && tasks.get(id).status !== 'running', `up ${up}, alive after ${alive()}`);
+      } }
     // ---- seeing without a vision model: render pages and read images as text ----
     { const fsv = require('fs'), pthv = require('path'); const see = require('./engine/see');
       fsv.writeFileSync(pthv.join(work, 'look.html'), '<!doctype html><title>Look test</title><body style="margin:0;background:#101830;color:#fff;font:32px sans-serif"><h1>PIXEL SCORE BOARD</h1><button id="go" onclick="document.querySelector(\'h1\').textContent=\'GAME STARTED\'">Start</button><canvas width="300" height="200" style="display:block"></canvas><img src="missing.png" alt="hero"><script>undefinedThing()</script></body>');

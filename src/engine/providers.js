@@ -224,6 +224,9 @@ function score(obj, m) {
   if (obj === 'fast' && m.provider === 'groq') s += 3;
   return s;
 }
+// without a key only the free models can answer (music and image models are free too, but cannot chat)
+const usableWithoutKey = (m) => (m.free || /(:|-|\/)free$/i.test(m.id)) && !/lyria|imagen|veo|whisper|tts|embed/i.test(m.id);
+
 function routeCandidates(objective, byProvider) {
   const obj = (objective || 'auto').replace(/^auto\/?/, '') || 'auto';
   const list = [];
@@ -235,4 +238,4 @@ function routeCandidates(objective, byProvider) {
   return list.sort((a, b) => b.s - a.s);
 }
 
-module.exports = { isClaudeArchived, setArchiveFile, getArchive, isArchived, unarchive, probeModels, setHealthFile, isBenched, bench, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates };
+module.exports = { isClaudeArchived, setArchiveFile, getArchive, isArchived, unarchive, probeModels, setHealthFile, isBenched, bench, markFailed, markOk, sticky, PROVIDERS, OMNI_MODELS, byId, baseOf, listModels, streamChat, routeCandidates, usableWithoutKey };

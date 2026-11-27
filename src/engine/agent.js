@@ -56,7 +56,7 @@ function omniChain(first) { const at = OMNI_CHAIN.indexOf(first); return at < 0 
 
 async function routeAcross(objective, env, args, onText) {
   const by = {};
-  await Promise.all(env.connected().map(async (pid) => { try { by[pid] = await providers.listModels(pid, env.getCreds(pid).key, env.bases()); } catch (_) {} }));
+  await Promise.all(env.connected().map(async (pid) => { try { const key = env.getCreds(pid).key; const all = await providers.listModels(pid, key, env.bases()); by[pid] = key ? all : all.filter(providers.usableWithoutKey); } catch (_) {} }));
   let lastErr; let attempts = 0; const tried = new Set();
   for (const obj of omniChain(objective)) {
     const cands = providers.routeCandidates(obj, by);

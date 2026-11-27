@@ -67,6 +67,14 @@ function html2text(h) {
     .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
 }
 
+// Stop a command together with everything it started (it runs in its own process group).
+function killTree(child) {
+  try {
+    if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' }).on('error', () => child.kill());
+    else process.kill(-child.pid, 'SIGTERM');
+  } catch (_) { try { child.kill('SIGTERM'); } catch (e) {} }
+}
+
 // Background task table (per process)
 const tasks = new Map(); let taskSeq = 0;
 
@@ -76,7 +84,7 @@ function runBash(ctx, a) {
     const cwdFile = path.join(os.tmpdir(), `caelix-${process.pid}-${id}.cwd`);
     const wrapped = `{ ${a.command}\n}; __rc=$?; pwd -P > "${cwdFile}"; exit $__rc`;
     const shell = process.env.SHELL && fs.existsSync(process.env.SHELL) ? process.env.SHELL : '/bin/bash';
-    const child = spawn(shell, ['-c', wrapped], { cwd: ctx.cwd, env: { ...process.env, TERM: 'dumb' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(shell, ['-c', wrapped], { cwd: ctx.cwd, env: { ...process.env, TERM: 'dumb' }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     const outStream = fs.createWriteStream(outFile); let out = ''; let bg = !!a.run_in_background; let finished = false;
     const task = { id, command: a.command, child, outFile, status: 'running', started: Date.now() }; tasks.set(id, task);
     const sink = (d) => { outStream.write(d); if (out.length < 400000) out += d.toString(); if (ctx.onBgOutput && bg) ctx.onBgOutput(id, d.toString()); };
@@ -100,7 +108,7 @@ function runBash(ctx, a) {
       resolve(`Command did not complete within its ${Math.round(tmo / 1000)}s timeout and was moved to the background (task ${id}). Output: ${outFile}`);
     }, tmo);
     child.on('close', () => clearTimeout(timer));
-    if (ctx.signal) ctx.signal.addEventListener('abort', () => { try { child.kill('SIGTERM'); } catch (_) {} }, { once: true });
+    if (ctx.signal) ctx.signal.addEventListener('abort', () => { if (!finished && !bg) killTree(child); }, { once: true });
   });
 }
 
@@ -169,7 +177,7 @@ const IMPL = {
     return out.length ? out.join('\n') : 'No matches.';
   },
   Bash(ctx, a) { return runBash(ctx, a); },
-  async TaskStop(ctx, a) { const t = tasks.get(a.task_id); if (!t) return 'No such task.'; try { t.child.kill('SIGTERM'); } catch (_) {} t.status = 'stopped'; return 'Stopped ' + a.task_id; },
+  async TaskStop(ctx, a) { const t = tasks.get(a.task_id); if (!t) return 'No such task.'; killTree(t.child); t.status = 'stopped'; return 'Stopped ' + a.task_id; },
   async WebFetch(ctx, a) {
     const r = await fetch(a.url, { redirect: 'follow', headers: { 'User-Agent': 'CAELIX/2.0' }, signal: AbortSignal.timeout(20000) });
     const t = await r.text(); const ct = r.headers.get('content-type') || '';
